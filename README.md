@@ -38,10 +38,11 @@ npm start
 export HOTEL_DATA_URLS=https://example.com/ctrip.csv,https://example.com/meituan.jsonl.gz
 export HOTEL_DATA_URL_HEADERS='{"Authorization":"Bearer your_token"}'
 export HOTEL_DATA_CACHE_SECONDS=60
+export HOTEL_DATA_STALE_CACHE_SECONDS=300
 npm start
 ```
 
-远程 URL 使用和本地 CSV/JSON/JSONL 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。远程文件默认缓存 60 秒，可用 `HOTEL_DATA_CACHE_SECONDS` 调整刷新间隔；本地文件会按修改时间和文件大小自动刷新。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。`/api/status` 的 `providers.localInventory.remoteInventory.loads` 会列出每个远程源的加载状态、行数、缓存命中和失败原因。
+远程 URL 使用和本地 CSV/JSON/JSONL 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。远程文件默认缓存 60 秒，可用 `HOTEL_DATA_CACHE_SECONDS` 调整刷新间隔；本地文件会按修改时间和文件大小自动刷新。`HOTEL_DATA_STALE_CACHE_SECONDS` 可在远程源临时失败时继续使用最近成功拉取的过期缓存。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。`/api/status` 的 `providers.localInventory.remoteInventory.loads` 会列出每个远程源的加载状态、行数、缓存命中和失败原因。
 
 如果多家远程供应商字段不同，也可以配置一个远程清单 URL。Node 后端会读取清单里的多个供应商导出源，并按每个源的 `fieldMap` 做字段映射：
 

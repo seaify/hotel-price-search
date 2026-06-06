@@ -803,7 +803,8 @@ function renderProviderStatus(providers) {
   const remoteCount = Number(providers?.localInventory?.remoteCount || 0);
   const remoteHealth = providers?.localInventory?.remoteInventory || {};
   const remoteLoadCount = Number(remoteHealth.loadCount || 0);
-  const remoteHealthyCount = Number(remoteHealth.okCount || 0) + Number(remoteHealth.partialCount || 0);
+  const remoteStaleCount = Number(remoteHealth.staleCount || 0);
+  const remoteHealthyCount = Number(remoteHealth.okCount || 0) + Number(remoteHealth.partialCount || 0) + remoteStaleCount;
   const remoteFailedCount = Number(remoteHealth.failedCount || 0);
   const remoteLoadingCount = Number(remoteHealth.loadingCount || 0);
   const supplierApiReady = Boolean(providers?.supplierApi?.configured);
@@ -815,9 +816,9 @@ function renderProviderStatus(providers) {
     ...(providers?.supplierApi?.sourceErrors || [])
   ];
   const remoteHealthLabel = remoteLoadCount
-    ? `${remoteHealthyCount}/${remoteLoadCount} 正常${remoteLoadingCount ? ` · ${remoteLoadingCount} 加载中` : ''}${remoteFailedCount ? ` · ${remoteFailedCount} 失败` : ''}`
+    ? `${remoteHealthyCount}/${remoteLoadCount} 可用${remoteStaleCount ? ` · ${remoteStaleCount} 过期` : ''}${remoteLoadingCount ? ` · ${remoteLoadingCount} 加载中` : ''}${remoteFailedCount ? ` · ${remoteFailedCount} 失败` : ''}`
     : remoteCount ? `${remoteCount} 源` : '未接入';
-  const remoteHealthState = remoteFailedCount ? 'warn' : remoteHealthyCount ? 'on' : remoteCount ? 'warn' : '';
+  const remoteHealthState = remoteFailedCount || remoteStaleCount ? 'warn' : remoteHealthyCount ? 'on' : remoteCount ? 'warn' : '';
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
     ['真实覆盖城市', coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
@@ -873,7 +874,7 @@ function renderProviderErrorSummary(sourceErrors) {
 
 function getRemoteLoadStatusClass(status) {
   if (status === 'ok') return 'on';
-  if (status === 'partial' || status === 'failed') return 'warn';
+  if (status === 'partial' || status === 'failed' || status === 'stale') return 'warn';
   return '';
 }
 
@@ -881,6 +882,7 @@ function formatRemoteLoadStatus(load) {
   if (load.status === 'loading') return '加载中';
   if (load.status === 'failed') return '失败';
   const rowText = Number(load.rowCount || 0) ? `${formatNumber(load.rowCount)} 行` : '无价格';
+  if (load.status === 'stale') return `过期缓存 · ${rowText}`;
   if (load.status === 'partial') return `${rowText} · ${load.failedCount || 0} 失败`;
   return rowText;
 }
@@ -1104,6 +1106,7 @@ function getStaticProviderStatus() {
         manifestCount: remoteLoads.length - remoteSourceLoads.length,
         okCount: remoteSourceLoads.filter((load) => load.status === 'ok').length,
         partialCount: remoteSourceLoads.filter((load) => load.status === 'partial').length,
+        staleCount: remoteSourceLoads.filter((load) => load.status === 'stale').length,
         failedCount: failedRemoteLoads.length,
         loadingCount: remoteSourceLoads.filter((load) => load.status === 'loading').length,
         loads: remoteLoads

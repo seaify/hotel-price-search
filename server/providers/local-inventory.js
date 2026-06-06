@@ -15,6 +15,7 @@ const maxImportBytes = 8 * 1024 * 1024;
 const defaultRemoteMaxBytes = 12 * 1024 * 1024;
 const defaultRemoteTimeoutMs = 8_000;
 const defaultInventoryCacheSeconds = 60;
+const defaultInventoryStaleCacheSeconds = 0;
 const allowedImportExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
 const allowedInventoryFormats = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']);
 const gzipFormats = new Set(['.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']);
@@ -139,10 +140,13 @@ export async function getLocalInventoryStatus() {
       timeoutMs: getRemoteTimeoutMs(),
       maxBytes: getRemoteMaxBytes(),
       cacheSeconds: getInventoryCacheSeconds(),
+      staleCacheSeconds: getInventoryStaleCacheSeconds(),
+      staleCacheConfigured: getInventoryStaleCacheSeconds() > 0,
       loadCount: 0,
       manifestCount: 0,
       okCount: 0,
       partialCount: 0,
+      staleCount: 0,
       failedCount: 0,
       loadingCount: 0,
       loads: []
@@ -584,33 +588,21 @@ async function readRemoteInventoryUrl(url, options = {}) {
   const cached = inventoryCache.get(cacheKey);
   const cacheTtlMs = getInventoryCacheSeconds() * 1000;
   if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
-    const remoteLoad = buildRemoteInventoryLoad({
-      url,
-      name: options.sourceName || redactRemoteUrl(url),
-      status: 'ok',
-      rowCount: cached.rows.length,
-      type: options.type || 'source',
-      groupUrl: options.groupUrl || url,
-      cache: 'hit',
-      cachedAt: cached.cachedAt
-    });
-    return {
-      filePath: url,
-      sourceLabel: options.sourceName || redactRemoteUrl(url),
-      readable: true,
-      rows: cached.rows,
-      sourceCount: 1,
-      cache: 'hit',
-      cachedAt: new Date(cached.cachedAt).toISOString(),
-      remoteLoad
-    };
+    return buildCachedRemoteInventoryUrlResult(url, options, cached, 'hit');
   }
 
-  const { text, format } = await fetchRemoteInventoryContent(url, { headers });
-  const rows = parseInventory(text, format, { fieldMap }).map((row) => ({
-    ...row,
-    source: row.source || row.provider || row.supplier || options.sourceName || row.source
-  }));
+  let rows;
+  try {
+    const { text, format } = await fetchRemoteInventoryContent(url, { headers });
+    rows = parseInventory(text, format, { fieldMap }).map((row) => ({
+      ...row,
+      source: row.source || row.provider || row.supplier || options.sourceName || row.source
+    }));
+  } catch (error) {
+    const staleResult = buildStaleRemoteInventoryUrlResult(url, options, cached, error);
+    if (staleResult) return staleResult;
+    throw error;
+  }
   return {
     filePath: url,
     sourceLabel: options.sourceName || redactRemoteUrl(url),
@@ -630,29 +622,59 @@ async function readRemoteInventoryUrl(url, options = {}) {
   };
 }
 
+function buildCachedRemoteInventoryUrlResult(url, options, cached, cacheState, error = null) {
+  const sourceLabel = options.sourceName || redactRemoteUrl(url);
+  const remoteLoad = buildRemoteInventoryLoad({
+    url,
+    name: sourceLabel,
+    status: cacheState === 'stale' ? 'stale' : 'ok',
+    rowCount: cached.rows.length,
+    type: options.type || 'source',
+    groupUrl: options.groupUrl || url,
+    cache: cacheState,
+    cachedAt: cached.cachedAt,
+    ...(error ? { error: error.message || '远程供应商文件读取失败。' } : {})
+  });
+  const sourceErrors = error
+    ? [`${sourceLabel} 读取失败，已使用过期缓存：${error.message || '远程供应商文件读取失败。'}`]
+    : [];
+  return {
+    filePath: url,
+    sourceLabel,
+    readable: true,
+    rows: cached.rows,
+    sourceCount: 1,
+    cache: cacheState,
+    cachedAt: new Date(cached.cachedAt).toISOString(),
+    ...(sourceErrors.length ? { sourceErrors } : {}),
+    remoteLoad
+  };
+}
+
+function buildStaleRemoteInventoryUrlResult(url, options, cached, error) {
+  if (!canUseStaleInventoryCache(cached)) return null;
+  return buildCachedRemoteInventoryUrlResult(url, options, cached, 'stale', error);
+}
+
 async function readRemoteInventoryManifestUrl(url) {
   const cacheKey = `remote-manifest:${url}`;
   const cached = inventoryCache.get(cacheKey);
   const cacheTtlMs = getInventoryCacheSeconds() * 1000;
   if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
-    const remoteLoads = markRemoteInventoryLoadsCached(cached.remoteLoads || [], cached.cachedAt);
-    return {
-      filePath: url,
-      sourceLabel: redactRemoteUrl(url),
-      readable: true,
-      rows: cached.rows,
-      sourceCount: cached.sourceCount,
-      sourceErrors: cached.sourceErrors,
-      remoteLoads,
-      cache: 'hit',
-      cachedAt: new Date(cached.cachedAt).toISOString()
-    };
+    return buildCachedRemoteInventoryManifestResult(url, cached, 'hit');
   }
 
-  const { text } = await fetchRemoteInventoryContent(url);
-  const sources = parseRemoteInventoryManifestSources(text, url);
-  if (!sources.length) {
-    throw new Error(`${redactRemoteUrl(url)} 没有识别到远程供应商清单。`);
+  let sources;
+  try {
+    const { text } = await fetchRemoteInventoryContent(url);
+    sources = parseRemoteInventoryManifestSources(text, url);
+    if (!sources.length) {
+      throw new Error(`${redactRemoteUrl(url)} 没有识别到远程供应商清单。`);
+    }
+  } catch (error) {
+    const staleResult = buildStaleRemoteInventoryManifestResult(url, cached, error);
+    if (staleResult) return staleResult;
+    throw error;
   }
 
   const loads = await Promise.allSettled(sources.map((source) =>
@@ -691,6 +713,8 @@ async function readRemoteInventoryManifestUrl(url) {
       }),
       ...childLoads
     ];
+    const staleResult = buildStaleRemoteInventoryManifestResult(url, cached, error);
+    if (staleResult) return staleResult;
     throw error;
   }
 
@@ -727,6 +751,29 @@ async function readRemoteInventoryManifestUrl(url) {
     remoteLoads,
     cache: 'miss'
   };
+}
+
+function buildCachedRemoteInventoryManifestResult(url, cached, cacheState, error = null) {
+  const sourceLabel = redactRemoteUrl(url);
+  const sourceErrors = error
+    ? [`${sourceLabel} 清单读取失败，已使用过期缓存：${error.message || '远程供应商清单读取失败。'}`]
+    : cached.sourceErrors || [];
+  return {
+    filePath: url,
+    sourceLabel,
+    readable: true,
+    rows: cached.rows,
+    sourceCount: cached.sourceCount,
+    sourceErrors,
+    remoteLoads: markRemoteInventoryLoadsCached(cached.remoteLoads || [], cached.cachedAt, cacheState, error),
+    cache: cacheState,
+    cachedAt: new Date(cached.cachedAt).toISOString()
+  };
+}
+
+function buildStaleRemoteInventoryManifestResult(url, cached, error) {
+  if (!canUseStaleInventoryCache(cached)) return null;
+  return buildCachedRemoteInventoryManifestResult(url, cached, 'stale', error);
 }
 
 function buildRemoteInventoryLoad({
@@ -781,18 +828,27 @@ function buildRemoteInventoryStatus(base = {}, loads = []) {
     manifestCount: normalizedLoads.length - sourceLoads.length,
     okCount: sourceLoads.filter((load) => load.status === 'ok').length,
     partialCount: sourceLoads.filter((load) => load.status === 'partial').length,
+    staleCount: sourceLoads.filter((load) => load.status === 'stale').length,
     failedCount: sourceLoads.filter((load) => load.status === 'failed').length,
     loadingCount: sourceLoads.filter((load) => load.status === 'loading').length,
     loads: normalizedLoads
   };
 }
 
-function markRemoteInventoryLoadsCached(loads, cachedAt) {
+function markRemoteInventoryLoadsCached(loads, cachedAt, cacheState = 'hit', error = null) {
   return loads.map((load) => ({
     ...load,
-    cache: 'hit',
-    cachedAt: new Date(cachedAt).toISOString()
+    status: cacheState === 'stale' && load.type !== 'manifest' ? 'stale' : load.status,
+    cache: cacheState,
+    cachedAt: new Date(cachedAt).toISOString(),
+    ...(error && load.type === 'manifest' ? { error: error.message || '远程供应商清单读取失败。' } : {})
   }));
+}
+
+function canUseStaleInventoryCache(cached) {
+  const staleCacheSeconds = getInventoryStaleCacheSeconds();
+  if (!cached || staleCacheSeconds <= 0) return false;
+  return Date.now() - cached.cachedAt < (getInventoryCacheSeconds() + staleCacheSeconds) * 1000;
 }
 
 async function fetchRemoteInventoryContent(url, options = {}) {
@@ -947,12 +1003,21 @@ function getRemoteMaxBytes() {
 }
 
 function getInventoryCacheSeconds() {
-  return getPositiveInteger(process.env.HOTEL_DATA_CACHE_SECONDS, defaultInventoryCacheSeconds);
+  return getNonNegativeInteger(process.env.HOTEL_DATA_CACHE_SECONDS, defaultInventoryCacheSeconds);
+}
+
+function getInventoryStaleCacheSeconds() {
+  return getNonNegativeInteger(process.env.HOTEL_DATA_STALE_CACHE_SECONDS, defaultInventoryStaleCacheSeconds);
 }
 
 function getPositiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function getNonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : fallback;
 }
 
 function redactRemoteUrl(value) {

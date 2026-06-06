@@ -3193,6 +3193,135 @@ describe('hotel search data', () => {
     }
   });
 
+  it('uses stale cached remote supplier inventory after transient failures', async () => {
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestUrl = process.env.HOTEL_DATA_MANIFEST_URL;
+    const previousManifestUrls = process.env.HOTEL_DATA_MANIFEST_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+    const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
+    const previousStaleCacheSeconds = process.env.HOTEL_DATA_STALE_CACHE_SECONDS;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_URL;
+    delete process.env.HOTEL_DATA_MANIFEST_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    delete process.env.HOTEL_DATA_URL_HEADERS;
+    process.env.HOTEL_DATA_CACHE_SECONDS = '0';
+    process.env.HOTEL_DATA_STALE_CACHE_SECONDS = '60';
+    clearInventoryCache();
+
+    const csv = [
+      'id,name,province,city,district,address,star,rating,price,currency,tags,source,checkIn,checkOut,available,bookingUrl',
+      'remote-stale-001,广州远程过期缓存供应商酒店,广东,广州,天河,广州市天河区缓存路 8 号,5,4.8,799,CNY,真实库存,远程过期缓存供应商,2026-06-01,2026-12-31,true,https://example.com/remote-stale-001'
+    ].join('\n');
+    let requestCount = 0;
+    const supplierServer = createHttpServer((request, response) => {
+      requestCount += 1;
+      if (requestCount === 2) {
+        response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ error: 'temporarily unavailable' }));
+        return;
+      }
+
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8' });
+      response.end(csv);
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_DATA_URL = `http://127.0.0.1:${address.port}/remote-stale.csv`;
+
+    try {
+      const query = {
+        city: '广州',
+        keyword: '远程过期缓存',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      };
+      const first = await searchHotels(query);
+      const second = await searchHotels(query);
+
+      assert.equal(first.source, 'local');
+      assert.equal(second.source, 'local');
+      assert.equal(first.total, 1);
+      assert.equal(second.total, 1);
+      assert.equal(second.hotels[0].name, '广州远程过期缓存供应商酒店');
+      assert.equal(requestCount, 2);
+      assert.equal(first.providers.localInventory.remoteInventory.loads[0].cache, 'miss');
+      assert.equal(second.providers.localInventory.remoteInventory.staleCount, 1);
+      assert.equal(second.providers.localInventory.remoteInventory.failedCount, 0);
+      assert.equal(second.providers.localInventory.remoteInventory.loads[0].status, 'stale');
+      assert.equal(second.providers.localInventory.remoteInventory.loads[0].cache, 'stale');
+      assert.match(second.providers.localInventory.remoteInventory.loads[0].error, /HTTP 503/);
+      assert.ok(second.providers.localInventory.sourceErrors.some((message) => /已使用过期缓存/.test(message)));
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousManifestUrl === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URL;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URL = previousManifestUrl;
+      }
+      if (previousManifestUrls === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URLS;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URLS = previousManifestUrls;
+      }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
+      }
+      if (previousDataUrlHeaders === undefined) {
+        delete process.env.HOTEL_DATA_URL_HEADERS;
+      } else {
+        process.env.HOTEL_DATA_URL_HEADERS = previousDataUrlHeaders;
+      }
+      if (previousCacheSeconds === undefined) {
+        delete process.env.HOTEL_DATA_CACHE_SECONDS;
+      } else {
+        process.env.HOTEL_DATA_CACHE_SECONDS = previousCacheSeconds;
+      }
+      if (previousStaleCacheSeconds === undefined) {
+        delete process.env.HOTEL_DATA_STALE_CACHE_SECONDS;
+      } else {
+        process.env.HOTEL_DATA_STALE_CACHE_SECONDS = previousStaleCacheSeconds;
+      }
+    }
+  });
+
   it('loads a remote supplier manifest with per-source field maps', async () => {
     const previousFile = process.env.HOTEL_DATA_FILE;
     const previousFiles = process.env.HOTEL_DATA_FILES;
