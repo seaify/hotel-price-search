@@ -1272,6 +1272,133 @@ describe('hotel search data', () => {
     }
   });
 
+  it('fetches and caches client credentials tokens for live supplier APIs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-auth-'));
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET',
+      'SUPPLIER_CLIENT_ID',
+      'SUPPLIER_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = dir;
+    process.env.SUPPLIER_CLIENT_ID = 'client-id';
+    process.env.SUPPLIER_CLIENT_SECRET = 'client-secret';
+    clearInventoryCache();
+
+    let tokenRequestCount = 0;
+    let priceRequestCount = 0;
+    const tokenBodies = [];
+    const priceAuthorizations = [];
+    const supplierServer = createHttpServer(async (request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      if (url.pathname === '/oauth/token') {
+        let body = '';
+        for await (const chunk of request) body += chunk;
+        tokenRequestCount += 1;
+        tokenBodies.push(Object.fromEntries(new URLSearchParams(body)));
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          access_token: 'supplier-live-token',
+          expires_in: 3600
+        }));
+        return;
+      }
+
+      priceRequestCount += 1;
+      priceAuthorizations.push(request.headers.authorization);
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: 'auth-live-001',
+            hotelName: '南京Token实时供应商酒店',
+            province: '江苏省',
+            city: '南京市',
+            district: '秦淮',
+            price: 566,
+            source: 'Token实时供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: 'Token实时供应商',
+      url: `http://127.0.0.1:${address.port}/prices`,
+      method: 'GET',
+      auth: {
+        type: 'client_credentials',
+        tokenUrl: `http://127.0.0.1:${address.port}/oauth/token`,
+        clientIdEnv: 'SUPPLIER_CLIENT_ID',
+        clientSecretEnv: 'SUPPLIER_CLIENT_SECRET',
+        scope: 'hotel.search'
+      }
+    });
+
+    try {
+      const first = await searchHotels({
+        city: '南京',
+        keyword: 'Token实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      const second = await searchHotels({
+        city: '南京',
+        keyword: 'Token实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(first.source, 'supplier-api');
+      assert.equal(first.total, 1);
+      assert.equal(first.hotels[0].name, '南京Token实时供应商酒店');
+      assert.equal(first.hotels[0].price, 566);
+      assert.equal(first.providers.supplierApi.authConfigured, true);
+      assert.equal(second.source, 'supplier-api');
+      assert.equal(tokenRequestCount, 1);
+      assert.equal(priceRequestCount, 2);
+      assert.deepEqual(tokenBodies[0], {
+        grant_type: 'client_credentials',
+        client_id: 'client-id',
+        client_secret: 'client-secret',
+        scope: 'hotel.search'
+      });
+      assert.deepEqual(priceAuthorizations, ['Bearer supplier-live-token', 'Bearer supplier-live-token']);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('preserves pagination metadata from a single live supplier API', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-pagination-'));
     const previousFile = process.env.HOTEL_DATA_FILE;

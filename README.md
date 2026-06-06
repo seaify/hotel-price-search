@@ -121,6 +121,20 @@ npm start
 
 `GET` 默认会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 默认会传同样的 JSON body。若供应商请求字段不同，可用 `requestMap` 改名：左边是供应商需要的请求字段，右边是本站内部查询字段。除原始 `limit` / `offset` 外，还可映射派生字段 `page` 和 `pageSize`，其中 `page = floor(offset / limit) + 1`。GET 会把嵌套路径展平成查询参数，例如 `stay.arrival=2026-06-06`；POST 会生成嵌套 JSON。`requestDefaults` 可放固定请求参数，例如 `locale`、`currency`、`channel`。
 
+供应商如果需要先换 access token，可以在单个源里配置 `auth`。`clientIdEnv` / `clientSecretEnv` 会从服务器环境变量读取密钥，token 会按 `expires_in` 缓存，并自动注入 `Authorization: Bearer ...`：
+
+```json
+{
+  "auth": {
+    "type": "client_credentials",
+    "tokenUrl": "https://example.com/oauth/token",
+    "clientIdEnv": "CTRIP_CLIENT_ID",
+    "clientSecretEnv": "CTRIP_CLIENT_SECRET",
+    "scope": "hotel.search"
+  }
+}
+```
+
 响应字段格式和本地供应商文件相同，支持嵌套 JSON、CSV、JSONL/NDJSON。若酒店列表在嵌套字段里，可用 `responsePath` 指向列表，例如 `data.hotelList`；若分页信息也在嵌套字段里，可用 `paginationPath`，例如 `data.paging`。若供应商返回字段不同，可用 `fieldMap` 把内部字段映射到供应商返回字段，支持点路径或候选路径数组，例如 `{"name":"hotel.title","price":["rate.sale","price"],"bookingUrl":"rate.book"}`。
 
 单个实时供应商如果已经在接口侧做全国分页，可以返回总量和下一页信息，页面会沿用供应商的 `total` / `pagination`，不会把单页结果误判成全部结果：

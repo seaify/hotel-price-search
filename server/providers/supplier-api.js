@@ -2,6 +2,7 @@ import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
 const defaultSupplierApiTimeoutMs = 10_000;
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
+const supplierAuthCache = new Map();
 
 export function getSupplierApiStatus() {
   const sources = getSupplierApiSources();
@@ -17,6 +18,7 @@ export function getSupplierApiStatus() {
     methods,
     timeoutMs: firstSource?.timeoutMs || getSupplierApiTimeoutMs(),
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
+    authConfigured: sources.some((source) => Boolean(source.auth)),
     requestMapConfigured: sources.some((source) =>
       Object.keys(source.requestMap || {}).length > 0 ||
       Object.keys(source.requestDefaults || {}).length > 0
@@ -79,7 +81,7 @@ export async function searchSupplierApiInventory(params) {
 }
 
 async function readSupplierApiSource(source, params) {
-  const { url, init } = buildSupplierApiRequest(source, params);
+  const { url, init } = await buildSupplierApiRequest(source, params);
   const response = await fetch(url, init);
   const text = await response.text();
   if (!response.ok) {
@@ -207,7 +209,7 @@ function firstBoolean(candidates, fields) {
   return null;
 }
 
-function buildSupplierApiRequest(source, params) {
+async function buildSupplierApiRequest(source, params) {
   const method = source.method || getSupplierApiMethod();
   const url = new URL(source.url);
   const query = buildSupplierQuery(params, source);
@@ -215,20 +217,115 @@ function buildSupplierApiRequest(source, params) {
     Accept: 'application/json, text/csv, application/x-ndjson',
     ...(source.headers || getSupplierApiHeaders())
   };
+  const authHeaders = await getSupplierAuthHeaders(source);
+  const requestHeaders = {
+    ...headers,
+    ...authHeaders
+  };
   const init = {
     method,
-    headers,
+    headers: requestHeaders,
     signal: AbortSignal.timeout(source.timeoutMs || getSupplierApiTimeoutMs())
   };
 
   if (method === 'GET') {
     appendSearchParams(url, query);
   } else {
-    init.headers = { 'Content-Type': 'application/json', ...headers };
+    init.headers = { 'Content-Type': 'application/json', ...requestHeaders };
     init.body = JSON.stringify(query);
   }
 
   return { url, init };
+}
+
+async function getSupplierAuthHeaders(source) {
+  if (!source.auth) return {};
+  const token = await getSupplierAuthToken(source.auth, source);
+  return {
+    [source.auth.headerName]: formatAuthHeaderValue(source.auth, token)
+  };
+}
+
+async function getSupplierAuthToken(auth, source) {
+  const cacheKey = getSupplierAuthCacheKey(auth, source);
+  const cached = supplierAuthCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + auth.cacheSkewMs) {
+    return cached.accessToken;
+  }
+
+  const { url, init } = buildSupplierAuthRequest(auth);
+  const response = await fetch(url, init);
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(`${source.name || '实时供应商'} token 接口返回 HTTP ${response.status}`);
+  }
+
+  const accessToken = getMappedValue(payload, auth.tokenPath);
+  if (!hasMappedValue(accessToken)) {
+    throw new Error(`${source.name || '实时供应商'} token 响应缺少 access token。`);
+  }
+  const expiresIn = Number(getMappedValue(payload, auth.expiresInPath) || auth.expiresInSeconds);
+  const expiresAt = Date.now() + Math.max(60, Number.isFinite(expiresIn) ? expiresIn : auth.expiresInSeconds) * 1000;
+  supplierAuthCache.set(cacheKey, {
+    accessToken: String(accessToken),
+    expiresAt
+  });
+  return String(accessToken);
+}
+
+function buildSupplierAuthRequest(auth) {
+  const method = auth.method || 'POST';
+  const url = new URL(auth.tokenUrl);
+  const payload = {
+    ...auth.body,
+    [auth.grantTypeField]: auth.grantType,
+    [auth.clientIdField]: auth.clientId,
+    [auth.clientSecretField]: auth.clientSecret
+  };
+  if (auth.scope) payload[auth.scopeField] = auth.scope;
+  const headers = {
+    Accept: 'application/json',
+    ...auth.headers
+  };
+  const init = {
+    method,
+    headers,
+    signal: AbortSignal.timeout(auth.timeoutMs)
+  };
+
+  if (method === 'GET') {
+    appendSearchParams(url, payload);
+    return { url, init };
+  }
+
+  if (auth.requestFormat === 'json') {
+    init.headers = { 'Content-Type': 'application/json', ...headers };
+    init.body = JSON.stringify(payload);
+  } else {
+    init.headers = { 'Content-Type': 'application/x-www-form-urlencoded', ...headers };
+    init.body = new URLSearchParams(Object.entries(payload).map(([key, value]) => [key, String(value)]));
+  }
+  return { url, init };
+}
+
+function getSupplierAuthCacheKey(auth, source) {
+  return [
+    source.name,
+    auth.tokenUrl,
+    auth.clientId,
+    auth.scope,
+    JSON.stringify(auth.body)
+  ].join('|');
+}
+
+function formatAuthHeaderValue(auth, token) {
+  return auth.headerPrefix ? `${auth.headerPrefix} ${token}` : token;
 }
 
 function buildSupplierQuery(params, source = {}) {
@@ -350,6 +447,7 @@ function getSupplierApiConfigSources() {
       method: normalizeMethod(item.method || getSupplierApiMethod()),
       headers: normalizeHeaders(item.headers || {}),
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
+      auth: normalizeSupplierAuth(item.auth),
       fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {}),
       requestMap: normalizeFieldMap(item.requestMap || item.queryMap || {}),
       requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {}),
@@ -410,6 +508,42 @@ function normalizePathList(value) {
 function normalizeRequestDefaults(value) {
   if (!value || Array.isArray(value) || typeof value !== 'object') return {};
   return cloneRequestDefaults(value);
+}
+
+function normalizeSupplierAuth(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return null;
+  const tokenUrl = String(value.tokenUrl || value.url || value.endpoint || '').trim();
+  if (!tokenUrl) return null;
+  const type = String(value.type || 'client_credentials').trim().toLowerCase().replace(/-/g, '_');
+  if (type !== 'client_credentials') return null;
+  return {
+    type,
+    tokenUrl,
+    method: normalizeMethod(value.method || 'POST'),
+    requestFormat: String(value.requestFormat || value.format || 'form').trim().toLowerCase() === 'json' ? 'json' : 'form',
+    headers: normalizeHeaders(value.headers || {}),
+    body: normalizeRequestDefaults(value.body || value.params || {}),
+    clientId: getAuthConfigValue(value.clientId, value.clientIdEnv),
+    clientSecret: getAuthConfigValue(value.clientSecret, value.clientSecretEnv),
+    clientIdField: String(value.clientIdField || 'client_id'),
+    clientSecretField: String(value.clientSecretField || 'client_secret'),
+    grantType: String(value.grantType || 'client_credentials'),
+    grantTypeField: String(value.grantTypeField || 'grant_type'),
+    scope: getAuthConfigValue(value.scope, value.scopeEnv),
+    scopeField: String(value.scopeField || 'scope'),
+    tokenPath: normalizePathList(value.tokenPath || value.accessTokenPath || 'access_token'),
+    expiresInPath: normalizePathList(value.expiresInPath || value.expiresPath || 'expires_in'),
+    expiresInSeconds: getPositiveInteger(value.expiresInSeconds, 3600),
+    headerName: String(value.headerName || 'Authorization'),
+    headerPrefix: value.headerPrefix === null || value.headerPrefix === false ? '' : String(value.headerPrefix || 'Bearer'),
+    timeoutMs: getPositiveInteger(value.timeoutMs, getSupplierApiTimeoutMs()),
+    cacheSkewMs: getPositiveInteger(value.cacheSkewSeconds, 60) * 1000
+  };
+}
+
+function getAuthConfigValue(value, envName) {
+  if (envName && process.env[String(envName)]) return process.env[String(envName)];
+  return value === undefined || value === null ? '' : String(value);
 }
 
 function cloneRequestDefaults(value) {
