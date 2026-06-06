@@ -384,3 +384,16 @@ npm run build:pages
 ```
 
 然后重新运行 `npm run build:pages` 并推送，构建后的 `docs/hotel-inventory.manifest.json` 会随站点一起发布。全国库存建议按城市或省份分片，避免用户打开页面时一次下载完整全国价格库。
+
+如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：
+
+```bash
+npm run build:inventory-manifest
+npm run build:pages
+```
+
+生成脚本会扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市，写入 `public/hotel-inventory.manifest.json`。如果库存文件托管在独立对象存储，可用 `--base-url` 生成绝对 URL：
+
+```bash
+npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
+```
