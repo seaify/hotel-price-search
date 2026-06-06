@@ -399,6 +399,16 @@ npm run build:pages
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
 ```
 
+如果供应商给的是一份全国大文件，可以先自动拆成按城市懒加载的 JSONL 分片：
+
+```bash
+npm run split:inventory-shards -- --input /absolute/path/supplier-nationwide.csv --clean
+npm run audit:inventory-coverage
+npm run build:pages
+```
+
+拆分脚本会读取供应商文件里的省市字段，把记录写入 `public/inventory/<province>/<city>.jsonl`，并自动刷新 `public/hotel-inventory.manifest.json`。无法识别城市的行会被跳过并让命令返回非零退出码，便于先修数据再发布。
+
 发布前可以用覆盖审计确认是否真的达到全国覆盖：
 
 ```bash

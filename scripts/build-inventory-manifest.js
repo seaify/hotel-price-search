@@ -90,7 +90,7 @@ async function listInventoryFiles(inputDir) {
   return files.flat().sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
-function parseInventory(content, extension) {
+export function parseInventory(content, extension) {
   if (extension === '.json') return flattenInventoryDocument(JSON.parse(content));
   if (extension === '.jsonl' || extension === '.ndjson') {
     return content
@@ -244,7 +244,7 @@ function normalizeIdentifier(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
 }
 
-function normalizeInventoryLocation(cityValue, provinceValue) {
+export function normalizeInventoryLocation(cityValue, provinceValue) {
   const rawCity = String(cityValue || '').trim();
   const rawProvince = String(provinceValue || '').trim();
   const explicitProvince = findProvince(rawProvince) || findProvince(rawCity) || '';
@@ -288,7 +288,7 @@ function normalizeDestinationInput(value) {
     .replace(/[省市]$/, '');
 }
 
-function pick(row, field) {
+export function pick(row, field) {
   for (const key of fieldAliases[field] || [field]) {
     if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key];
   }
@@ -306,7 +306,7 @@ function formatSourceName(filePath) {
   return basename(filePath, extname(filePath)).replace(/[-_]+/g, ' ');
 }
 
-function sortChinese(values) {
+export function sortChinese(values) {
   return values.filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
