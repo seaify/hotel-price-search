@@ -10,11 +10,13 @@ const state = {
   staticImportNames: [],
   remoteInventoryLoads: [],
   defaultRemoteInventoryManifest: null,
+  inventoryReadiness: null,
   savedRemoteInventoryUrls: []
 };
 
 const remoteInventoryStorageKey = 'hotelPriceSearch.remoteInventoryUrls';
 const defaultRemoteInventoryManifestPath = 'hotel-inventory.manifest.json';
+const inventoryReadinessPath = 'inventory-readiness.json';
 const maxSavedRemoteInventoryUrls = 10;
 
 const staticHotelBlueprints = [
@@ -120,6 +122,7 @@ async function init() {
   await loadCities();
   applyInitialQueryFromUrl();
   await loadDefaultRemoteInventoryManifest();
+  await loadInventoryReadiness();
   await loadSavedRemoteInventorySources();
   await loadProviderStatus();
   await runSearch();
@@ -538,6 +541,37 @@ function getDefaultRemoteInventoryManifestUrl() {
   }
 }
 
+async function loadInventoryReadiness() {
+  const configured = window.HOTEL_INVENTORY_READINESS;
+  if (configured === false || configured === null) return;
+  const readinessPath = typeof configured === 'string' && configured.trim()
+    ? configured.trim()
+    : inventoryReadinessPath;
+  let readinessUrl;
+  try {
+    readinessUrl = new URL(readinessPath, window.location.href);
+  } catch {
+    return;
+  }
+  if (!['http:', 'https:'].includes(readinessUrl.protocol)) return;
+
+  let response;
+  try {
+    response = await fetch(readinessUrl.href, { cache: 'no-store' });
+  } catch {
+    return;
+  }
+  if (response.status === 404) return;
+  if (!response.ok) return;
+
+  try {
+    const parsed = JSON.parse(await response.text());
+    state.inventoryReadiness = parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    state.inventoryReadiness = null;
+  }
+}
+
 async function loadSavedRemoteInventorySources() {
   if (!isStaticMode() || !state.savedRemoteInventoryUrls.length) return;
 
@@ -949,6 +983,9 @@ function renderProviderStatus(providers) {
   const manifestCoverage = remoteHealth.manifestCoverage;
   const coverage = providers?.localInventory?.coverage || manifestCoverage;
   const coverageLabel = providers?.localInventory?.coverage ? '真实覆盖城市' : manifestCoverage ? '清单覆盖城市' : '真实覆盖城市';
+  const readiness = state.inventoryReadiness;
+  const readinessStatus = formatInventoryReadinessStatus(readiness);
+  const readinessState = getInventoryReadinessState(readiness);
   const sourceErrors = [
     ...(providers?.localInventory?.sourceErrors || []),
     ...(providers?.supplierApi?.sourceErrors || [])
@@ -961,6 +998,7 @@ function renderProviderStatus(providers) {
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
     [coverageLabel, coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
+    ['发布验收', readinessStatus, readinessState],
     ['远程供应商文件', remoteHealthLabel, remoteHealthState],
     ['实时供应商 API', supplierApiReady ? `${supplierApiCount || 1} 源` : '未配置', supplierApiReady ? 'on' : ''],
     ['Amadeus API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
@@ -979,7 +1017,29 @@ function renderProviderStatus(providers) {
     ${renderProviderErrorSummary(sourceErrors)}
   `;
   elements.coverageDownloadButton.disabled = !hasCoverageSource();
-  elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : supplierApiReady ? '实时供应商 API 已配置' : apiReady ? 'Amadeus API 已配置' : '全国示例价格库';
+  elements.sourcePill.textContent = readiness?.passed ? '供应商库存验收通过'
+    : localReady ? '供应商真实库存已接入'
+    : supplierApiReady ? '实时供应商 API 已配置'
+    : apiReady ? 'Amadeus API 已配置'
+    : readiness?.mode === 'inventory-audit' ? '供应商库存未通过验收'
+    : '全国示例价格库';
+}
+
+function formatInventoryReadinessStatus(readiness) {
+  if (!readiness) return '未生成';
+  if (readiness.passed) return '已通过';
+  if (readiness.mode === 'demo') return '未接入真实库存';
+  const coverage = readiness.coverage || {};
+  if (Number(coverage.totalCities || 0)) {
+    return `未通过 · ${coverage.coveredCities || 0}/${coverage.totalCities || 0} 城`;
+  }
+  return '未通过';
+}
+
+function getInventoryReadinessState(readiness) {
+  if (!readiness) return '';
+  if (readiness.passed) return 'on';
+  return 'warn';
 }
 
 function renderRemoteInventoryHealth(remoteHealth = {}) {
@@ -1037,7 +1097,7 @@ async function syncProviderPanels(providers) {
 async function refreshCoverageDashboard(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
   if (!localReady) {
-    renderCoverageDashboard(providers?.localInventory?.remoteInventory?.manifestCoverage || null);
+    renderCoverageDashboard(providers?.localInventory?.remoteInventory?.manifestCoverage || getInventoryReadinessCoverageForDashboard());
     return;
   }
 
@@ -1051,11 +1111,34 @@ async function refreshCoverageDashboard(providers) {
   }
 }
 
+function getInventoryReadinessCoverageForDashboard() {
+  const coverage = state.inventoryReadiness?.coverage;
+  if (!coverage || !Number(coverage.totalCities || 0)) return null;
+  return {
+    ...coverage,
+    mode: coverage.mode || 'audit',
+    sourceCoverage: (coverage.sourceCoverage || []).map((source) => ({
+      sourceName: source.sourceName || source.name || '供应商',
+      coveredCities: Number(source.coveredCities || source.cityCount || 0),
+      totalCities: Number(source.totalCities || coverage.totalCities || 0),
+      hotelCount: Number(source.hotelCount || 0),
+      rowCount: Number(source.rowCount || 0),
+      pricedHotelCount: Number(source.pricedHotelCount || 0),
+      pricedRowCount: Number(source.pricedRowCount || 0)
+    }))
+  };
+}
+
 function renderCoverageDashboard(coverage) {
   if (!elements.coverageDashboard) return;
   if (!coverage || !Number(coverage.totalCities)) {
-    elements.coverageDashboard.hidden = true;
-    elements.coverageDashboard.innerHTML = '';
+    if (state.inventoryReadiness) {
+      elements.coverageDashboard.hidden = false;
+      elements.coverageDashboard.innerHTML = renderInventoryReadinessSummary();
+    } else {
+      elements.coverageDashboard.hidden = true;
+      elements.coverageDashboard.innerHTML = '';
+    }
     return;
   }
 
@@ -1067,7 +1150,7 @@ function renderCoverageDashboard(coverage) {
   const dateLabel = coverage.query?.checkIn && coverage.query?.checkOut
     ? `${coverage.query.checkIn} 至 ${coverage.query.checkOut}`
     : '全部日期';
-  const heading = coverage.mode === 'manifest' ? '供应商清单覆盖' : '真实库存覆盖';
+  const heading = coverage.mode === 'manifest' ? '供应商清单覆盖' : coverage.mode === 'audit' ? '发布验收覆盖' : '真实库存覆盖';
   const hotelLabel = coverage.mode === 'manifest' ? '清单酒店' : '真实酒店';
   const rowLabel = coverage.mode === 'manifest' ? '清单报价行' : '报价行';
   const pricedHotelCount = Number(coverage.pricedHotelCount || 0);
@@ -1106,6 +1189,7 @@ function renderCoverageDashboard(coverage) {
         </div>
       ` : ''}
     </div>
+    ${renderInventoryReadinessSummary()}
     ${sourceCoverage.length ? `
       <div class="coverage-source-list">
         ${sourceCoverage.map((source) => `
@@ -1125,6 +1209,100 @@ function renderCoverageDashboard(coverage) {
       </div>
     ` : ''}
   `;
+}
+
+function renderInventoryReadinessSummary() {
+  const readiness = state.inventoryReadiness;
+  if (!readiness) return '';
+
+  const statusClass = readiness.passed ? 'passed' : 'failed';
+  const statusText = readiness.passed
+    ? '发布验收已通过'
+    : readiness.mode === 'demo' ? '未接入真实库存验收' : '发布验收未通过';
+  const generatedAt = readiness.generatedAt ? `生成于 ${formatReadinessTime(readiness.generatedAt)}` : '';
+  const details = readiness.passed
+    ? formatInventoryReadinessPassText(readiness)
+    : formatInventoryReadinessFailureText(readiness);
+  const tags = buildInventoryReadinessTags(readiness.coverage || {});
+
+  return `
+    <div class="coverage-readiness ${escapeAttribute(statusClass)}">
+      <div class="coverage-readiness-title">
+        <strong>${escapeHtml(statusText)}</strong>
+        ${generatedAt ? `<span>${escapeHtml(generatedAt)}</span>` : ''}
+      </div>
+      <p>${escapeHtml(details)}</p>
+      ${tags.length ? `
+        <div class="readiness-tags">
+          ${tags.map((tag) => `<i>${escapeHtml(tag)}</i>`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function formatInventoryReadinessPassText(readiness) {
+  const coverage = readiness.coverage || {};
+  if (!Number(coverage.totalCities || 0)) return '当前构建已通过配置的供应商库存发布门槛。';
+  return `已覆盖 ${coverage.coveredCities || 0}/${coverage.totalCities || 0} 城，发布门槛和价格证据均通过。`;
+}
+
+function formatInventoryReadinessFailureText(readiness) {
+  if (readiness.mode === 'demo') {
+    return '当前构建没有经过真实供应商清单审计，页面会使用示例价格库或用户导入的价格源。';
+  }
+  const coverage = readiness.coverage || {};
+  const failures = [];
+  if (Number(coverage.missingCityCount || 0)) failures.push(`缺口 ${coverage.missingCityCount} 城`);
+  if (Number(coverage.citiesWithoutHotelStatsCount || 0)) failures.push(`${coverage.citiesWithoutHotelStatsCount} 城缺酒店数证据`);
+  if (Number(coverage.citiesBelowMinimumCount || 0)) failures.push(`${coverage.citiesBelowMinimumCount} 城低于库存深度门槛`);
+  if (Number(coverage.citiesBelowPriceMinimumCount || 0)) failures.push(`${coverage.citiesBelowPriceMinimumCount} 城低于有价报价门槛`);
+  if ((coverage.totalMinimumFailures || []).length) {
+    failures.push(`全国总量不足：${coverage.totalMinimumFailures.map((item) => `${formatReadinessFailureLabel(item.label)} ${formatNumber(item.actual)}/${formatNumber(item.minimum)}`).join('、')}`);
+  }
+  if (Number(coverage.citiesWithStalePricesCount || 0)) failures.push(`${coverage.citiesWithStalePricesCount} 城价格过期或缺更新时间`);
+  if (Number(coverage.unscopedSourceCount || 0)) failures.push(`${coverage.unscopedSourceCount} 个源缺少城市/省份范围`);
+  if (Number(coverage.unknownDestinationCount || 0)) failures.push(`${coverage.unknownDestinationCount} 个目的地无法识别`);
+  if (failures.length) return failures.slice(0, 4).join('；');
+  return '当前供应商库存没有通过配置的发布验收门槛。';
+}
+
+function buildInventoryReadinessTags(coverage) {
+  if (!coverage || !Number(coverage.totalCities || 0)) return [];
+  const tags = [
+    `覆盖 ${coverage.coveredCities || 0}/${coverage.totalCities || 0} 城`,
+    `酒店 ${formatNumber(coverage.hotelCount || 0)}`,
+    `报价 ${formatNumber(coverage.rowCount || 0)}`,
+    Number(coverage.pricedHotelCount || 0) || Number(coverage.pricedRowCount || 0)
+      ? `有价 ${formatNumber(coverage.pricedHotelCount || 0)} 酒店 / ${formatNumber(coverage.pricedRowCount || 0)} 报价`
+      : ''
+  ];
+  if (Number(coverage.minHotelsPerCity || 0)) tags.push(`每城酒店 >= ${formatNumber(coverage.minHotelsPerCity)}`);
+  if (Number(coverage.minRowsPerCity || 0)) tags.push(`每城报价 >= ${formatNumber(coverage.minRowsPerCity)}`);
+  if (Number(coverage.minPricedHotelsPerCity || 0)) tags.push(`每城有价酒店 >= ${formatNumber(coverage.minPricedHotelsPerCity)}`);
+  if (Number(coverage.minPricedRowsPerCity || 0)) tags.push(`每城有价报价 >= ${formatNumber(coverage.minPricedRowsPerCity)}`);
+  if (Number(coverage.minTotalHotels || 0)) tags.push(`全国酒店 ${formatNumber(coverage.hotelCount)}/${formatNumber(coverage.minTotalHotels)}`);
+  if (Number(coverage.minTotalRows || 0)) tags.push(`全国报价 ${formatNumber(coverage.rowCount)}/${formatNumber(coverage.minTotalRows)}`);
+  if (Number(coverage.minTotalPricedHotels || 0)) tags.push(`全国有价酒店 ${formatNumber(coverage.pricedHotelCount)}/${formatNumber(coverage.minTotalPricedHotels)}`);
+  if (Number(coverage.minTotalPricedRows || 0)) tags.push(`全国有价报价 ${formatNumber(coverage.pricedRowCount)}/${formatNumber(coverage.minTotalPricedRows)}`);
+  if (Number(coverage.maxPriceAgeHours || 0)) tags.push(`价格 ${formatNumber(coverage.maxPriceAgeHours)} 小时内`);
+  return tags.filter(Boolean);
+}
+
+function formatReadinessFailureLabel(label) {
+  const labels = {
+    hotels: '酒店',
+    rows: '报价',
+    'priced hotels': '有价酒店',
+    'priced rows': '有价报价'
+  };
+  return labels[label] || label || '指标';
+}
+
+function formatReadinessTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleString('zh-CN', { hour12: false });
 }
 
 function getSourceText(source) {

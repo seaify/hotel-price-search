@@ -353,6 +353,62 @@ select:focus {
   white-space: nowrap;
 }
 
+.coverage-readiness {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(31, 74, 122, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.coverage-readiness.passed {
+  border-color: rgba(11, 122, 117, 0.24);
+  background: rgba(11, 122, 117, 0.08);
+}
+
+.coverage-readiness.failed {
+  border-color: rgba(200, 121, 26, 0.26);
+  background: rgba(200, 121, 26, 0.08);
+}
+
+.coverage-readiness-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.coverage-readiness-title strong {
+  font-size: 13px;
+}
+
+.coverage-readiness-title span,
+.coverage-readiness p,
+.readiness-tags i {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.coverage-readiness p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.readiness-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.readiness-tags i {
+  padding: 4px 7px;
+  border: 1px solid rgba(31, 74, 122, 0.12);
+  border-radius: 999px;
+  font-style: normal;
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .coverage-missing {
   display: grid;
   gap: 8px;

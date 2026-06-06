@@ -403,7 +403,7 @@ workflow 会先运行测试，再执行 `npm run publish:supplier-inventory:env`
 npm run build:pages
 ```
 
-`build:pages` 会先扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市和逐城市酒店数，刷新 `public/hotel-inventory.manifest.json`，再递归复制到 `docs/`。如果库存文件托管在独立对象存储，可用 `--base-url` 手动生成绝对 URL：
+`build:pages` 会先扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市和逐城市酒店数，刷新 `public/hotel-inventory.manifest.json`，再递归复制到 `docs/`。构建还会写入 `inventory-readiness.json`，记录本次供应商库存是否通过全国覆盖、每城深度、总量和价格新鲜度验收；GitHub Pages 页面侧栏会读取这份摘要并显示“发布验收已通过/未通过”和主要缺口。如果库存文件托管在独立对象存储，可用 `--base-url` 手动生成绝对 URL：
 
 ```bash
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/

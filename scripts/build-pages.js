@@ -13,18 +13,20 @@ export async function buildPages(options = {}) {
   const publicDir = resolve(rootDir, options.publicDir || 'public');
   const docsDir = resolve(rootDir, options.docsDir || 'docs');
   const inventory = await preparePagesInventory(rootDir, options);
+  const readiness = buildInventoryReadiness(inventory, options);
 
   const staticData = `window.HOTEL_STATIC_DATA = ${JSON.stringify({ cities: cityCatalog }, null, 2)};\nwindow.HOTEL_STATIC_MODE = false;\n`;
   const pagesStaticData = `window.HOTEL_STATIC_DATA = ${JSON.stringify({ cities: cityCatalog }, null, 2)};\nwindow.HOTEL_STATIC_MODE = true;\n`;
 
   await mkdir(publicDir, { recursive: true });
   await writeFile(resolve(publicDir, 'static-data.js'), staticData, 'utf8');
+  await writeFile(resolve(publicDir, 'inventory-readiness.json'), `${JSON.stringify(readiness, null, 2)}\n`, 'utf8');
   await rm(docsDir, { recursive: true, force: true });
   await copyPublicDirectory(publicDir, docsDir);
   await writeFile(resolve(docsDir, '.nojekyll'), '', 'utf8');
   await writeFile(resolve(docsDir, 'static-data.js'), pagesStaticData, 'utf8');
 
-  return { rootDir, publicDir, docsDir, inventory };
+  return { rootDir, publicDir, docsDir, inventory, readiness };
 }
 
 async function preparePagesInventory(rootDir, options) {
@@ -200,6 +202,220 @@ function formatCoverageFailure(coverage) {
     unscoped ? `Unscoped sources: ${unscoped}` : '',
     unknown ? `Unknown destinations: ${unknown}` : ''
   ].filter(Boolean).join(' ');
+}
+
+function buildInventoryReadiness(inventory = {}, options = {}) {
+  const generatedAt = String(options.generatedAt || process.env.HOTEL_PAGES_READINESS_GENERATED_AT || new Date().toISOString());
+  const coverage = inventory.coverage || null;
+
+  if (!coverage) {
+    return {
+      schemaVersion: 1,
+      generatedAt,
+      mode: 'demo',
+      passed: false,
+      sourceCount: Number(inventory.sourceCount || 0),
+      message: 'No supplier inventory manifest was audited. GitHub Pages will fall back to the demo price catalog until verified supplier inventory is published.',
+      coverage: null,
+      failures: [{
+        type: 'no-audited-inventory',
+        message: 'No verified supplier inventory manifest was audited.'
+      }]
+    };
+  }
+
+  return {
+    schemaVersion: 1,
+    generatedAt,
+    mode: 'inventory-audit',
+    passed: Boolean(coverage.passed),
+    sourceCount: Number(coverage.sourceCount || inventory.sourceCount || 0),
+    message: coverage.passed
+      ? 'Supplier inventory passed the configured nationwide publication audit.'
+      : 'Supplier inventory did not pass the configured nationwide publication audit.',
+    coverage: summarizeReadinessCoverage(coverage),
+    failures: summarizeReadinessFailures(coverage)
+  };
+}
+
+function summarizeReadinessCoverage(coverage) {
+  return {
+    mode: 'audit',
+    manifestPath: coverage.manifestPath || '',
+    passed: Boolean(coverage.passed),
+    query: coverage.query || null,
+    sourceCount: Number(coverage.sourceCount || 0),
+    scopedSourceCount: Number(coverage.scopedSourceCount || 0),
+    unscopedSourceCount: Number(coverage.unscopedSourceCount || 0),
+    rowCount: Number(coverage.rowCount || 0),
+    hotelCount: Number(coverage.hotelCount || 0),
+    pricedRowCount: Number(coverage.pricedRowCount || 0),
+    pricedHotelCount: Number(coverage.pricedHotelCount || 0),
+    coveredCities: Number(coverage.coveredCities || 0),
+    totalCities: Number(coverage.totalCities || 0),
+    coverageRatio: Number(coverage.coverageRatio || 0),
+    coveredProvinces: Number(coverage.coveredProvinces || 0),
+    totalProvinces: Number(coverage.totalProvinces || 0),
+    minHotelsPerCity: Number(coverage.minHotelsPerCity || 0),
+    minRowsPerCity: Number(coverage.minRowsPerCity || 0),
+    minPricedHotelsPerCity: Number(coverage.minPricedHotelsPerCity || 0),
+    minPricedRowsPerCity: Number(coverage.minPricedRowsPerCity || 0),
+    minTotalHotels: Number(coverage.minTotalHotels || 0),
+    minTotalRows: Number(coverage.minTotalRows || 0),
+    minTotalPricedHotels: Number(coverage.minTotalPricedHotels || 0),
+    minTotalPricedRows: Number(coverage.minTotalPricedRows || 0),
+    maxPriceAgeHours: Number(coverage.maxPriceAgeHours || 0),
+    freshnessCutoff: coverage.freshnessCutoff || '',
+    missingCityCount: (coverage.missingCities || []).length,
+    citiesWithoutHotelStatsCount: (coverage.citiesWithoutHotelStats || []).length,
+    citiesBelowMinimumCount: (coverage.citiesBelowMinimums || []).length,
+    citiesBelowPriceMinimumCount: (coverage.citiesBelowPriceMinimums || []).length,
+    citiesWithStalePricesCount: (coverage.citiesWithStalePrices || []).length,
+    unknownDestinationCount: (coverage.unknownDestinations || []).length,
+    totalMinimumFailures: normalizeTotalMinimumFailures(coverage.totalMinimumFailures || []),
+    missingCities: normalizeCityList(coverage.missingCities || []),
+    citiesWithoutHotelStats: normalizeCityList(coverage.citiesWithoutHotelStats || []),
+    citiesBelowMinimums: normalizeCityMinimums(coverage.citiesBelowMinimums || []),
+    citiesBelowPriceMinimums: normalizePriceMinimums(coverage.citiesBelowPriceMinimums || []),
+    citiesWithStalePrices: normalizeStaleCities(coverage.citiesWithStalePrices || []),
+    unscopedSources: normalizeUnscopedSources(coverage.unscopedSources || []),
+    unknownDestinations: [...(coverage.unknownDestinations || [])].map(String),
+    sourceCoverage: normalizeSourceCoverage(coverage.sourceCoverage || [])
+  };
+}
+
+function summarizeReadinessFailures(coverage) {
+  const failures = [];
+  if ((coverage.missingCities || []).length) {
+    failures.push({
+      type: 'missing-cities',
+      count: coverage.missingCities.length,
+      message: `${coverage.missingCities.length} catalog cities are not covered.`
+    });
+  }
+  if ((coverage.citiesWithoutHotelStats || []).length) {
+    failures.push({
+      type: 'missing-city-hotel-stats',
+      count: coverage.citiesWithoutHotelStats.length,
+      message: `${coverage.citiesWithoutHotelStats.length} covered cities do not have hotel-count evidence.`
+    });
+  }
+  if ((coverage.citiesBelowMinimums || []).length) {
+    failures.push({
+      type: 'city-depth-below-minimum',
+      count: coverage.citiesBelowMinimums.length,
+      message: `${coverage.citiesBelowMinimums.length} cities are below the configured per-city inventory minimum.`
+    });
+  }
+  if ((coverage.citiesBelowPriceMinimums || []).length) {
+    failures.push({
+      type: 'city-priced-depth-below-minimum',
+      count: coverage.citiesBelowPriceMinimums.length,
+      message: `${coverage.citiesBelowPriceMinimums.length} cities are below the configured per-city priced inventory minimum.`
+    });
+  }
+  if ((coverage.totalMinimumFailures || []).length) {
+    failures.push({
+      type: 'nationwide-total-below-minimum',
+      count: coverage.totalMinimumFailures.length,
+      message: `Nationwide totals are below configured minimums: ${coverage.totalMinimumFailures.map((item) => `${item.label} ${item.actual}/${item.minimum}`).join(', ')}.`
+    });
+  }
+  if ((coverage.citiesWithStalePrices || []).length) {
+    failures.push({
+      type: 'stale-city-prices',
+      count: coverage.citiesWithStalePrices.length,
+      message: `${coverage.citiesWithStalePrices.length} cities have stale or missing price update evidence.`
+    });
+  }
+  if ((coverage.unscopedSources || []).length) {
+    failures.push({
+      type: 'unscoped-sources',
+      count: coverage.unscopedSources.length,
+      message: `${coverage.unscopedSources.length} supplier sources are missing city/province scope.`
+    });
+  }
+  if ((coverage.unknownDestinations || []).length) {
+    failures.push({
+      type: 'unknown-destinations',
+      count: coverage.unknownDestinations.length,
+      message: `${coverage.unknownDestinations.length} destinations are not in the city catalog.`
+    });
+  }
+  return failures;
+}
+
+function normalizeCityList(cities) {
+  return cities.map((item) => ({
+    province: String(item.province || ''),
+    city: String(item.city || '')
+  }));
+}
+
+function normalizeCityMinimums(cities) {
+  return cities.map((item) => ({
+    province: String(item.province || ''),
+    city: String(item.city || ''),
+    rowCount: Number(item.rowCount || 0),
+    hotelCount: Number(item.hotelCount || 0),
+    minRowCount: Number(item.minRowCount || 0),
+    minHotelCount: Number(item.minHotelCount || 0)
+  }));
+}
+
+function normalizePriceMinimums(cities) {
+  return cities.map((item) => ({
+    province: String(item.province || ''),
+    city: String(item.city || ''),
+    pricedRowCount: Number(item.pricedRowCount || 0),
+    pricedHotelCount: Number(item.pricedHotelCount || 0),
+    minPricedRowCount: Number(item.minPricedRowCount || 0),
+    minPricedHotelCount: Number(item.minPricedHotelCount || 0),
+    minPrice: Number(item.minPrice || 0)
+  }));
+}
+
+function normalizeStaleCities(cities) {
+  return cities.map((item) => ({
+    province: String(item.province || ''),
+    city: String(item.city || ''),
+    updatedAt: String(item.updatedAt || ''),
+    maxPriceAgeHours: Number(item.maxPriceAgeHours || 0),
+    referenceTime: String(item.referenceTime || '')
+  }));
+}
+
+function normalizeTotalMinimumFailures(failures) {
+  return failures.map((item) => ({
+    field: String(item.field || ''),
+    label: String(item.label || ''),
+    actual: Number(item.actual || 0),
+    minimum: Number(item.minimum || 0)
+  }));
+}
+
+function normalizeUnscopedSources(sources) {
+  return sources.map((source) => ({
+    name: String(source.name || ''),
+    url: String(source.url || '')
+  }));
+}
+
+function normalizeSourceCoverage(sources) {
+  return sources.map((source) => ({
+    sourceName: String(source.sourceName || source.name || '供应商'),
+    url: String(source.url || ''),
+    coveredCities: Number(source.coveredCities ?? source.cityCount ?? 0),
+    totalCities: Number(source.totalCities || cityCatalog.length),
+    coveredProvinces: Number(source.coveredProvinces || 0),
+    totalProvinces: Number(source.totalProvinces || 0),
+    rowCount: Number(source.rowCount || 0),
+    hotelCount: Number(source.hotelCount || 0),
+    pricedRowCount: Number(source.pricedRowCount || 0),
+    pricedHotelCount: Number(source.pricedHotelCount || 0),
+    minPrice: Number(source.minPrice || 0),
+    hasScope: source.hasScope !== false
+  }));
 }
 
 function isTruthy(value) {

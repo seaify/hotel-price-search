@@ -18,13 +18,25 @@ describe('GitHub Pages builder', () => {
     ].join('\n'));
 
     try {
-      const result = await buildPages({ rootDir: root });
+      const result = await buildPages({ rootDir: root, generatedAt: '2026-06-06T00:00:00Z' });
       const manifest = JSON.parse(await readFile(join(root, 'docs', 'hotel-inventory.manifest.json'), 'utf8'));
+      const readiness = JSON.parse(await readFile(join(root, 'docs', 'inventory-readiness.json'), 'utf8'));
       const docsStaticData = await readFile(join(root, 'docs', 'static-data.js'), 'utf8');
       const publicStaticData = await readFile(join(root, 'public', 'static-data.js'), 'utf8');
 
       assert.equal(result.inventory.generatedManifest, true);
       assert.equal(result.inventory.sourceCount, 1);
+      assert.equal(result.readiness.generatedAt, '2026-06-06T00:00:00Z');
+      assert.equal(readiness.schemaVersion, 1);
+      assert.equal(readiness.mode, 'inventory-audit');
+      assert.equal(readiness.passed, false);
+      assert.equal(readiness.coverage.coveredCities, 1);
+      assert.equal(readiness.coverage.totalCities, cityCatalog.length);
+      assert.equal(readiness.coverage.hotelCount, 1);
+      assert.equal(readiness.coverage.pricedRowCount, 1);
+      assert.equal(readiness.coverage.missingCityCount, cityCatalog.length - 1);
+      assert.equal(readiness.coverage.sourceCoverage[0].coveredCities, 1);
+      assert.equal(readiness.failures[0].type, 'missing-cities');
       assert.equal(manifest.sources.length, 1);
       assert.equal(manifest.sources[0].url, 'inventory/guangdong/shenzhen.csv');
       assert.deepEqual(manifest.sources[0].cities, ['深圳']);
