@@ -8,6 +8,7 @@ const state = {
   displayed: 0,
   staticInventoryRows: [],
   staticImportNames: [],
+  remoteInventoryLoads: [],
   savedRemoteInventoryUrls: []
 };
 
@@ -276,7 +277,33 @@ async function importRemoteInventoryUrl() {
 
 async function importRemoteInventorySource(sourceUrl, options = {}) {
   const parsedUrl = parseRemoteInventoryUrl(sourceUrl);
-  const content = await fetchRemoteInventoryText(parsedUrl.href);
+  setRemoteInventoryLoad({
+    key: parsedUrl.href,
+    url: parsedUrl.href,
+    name: formatRemoteInventorySourceLabel(parsedUrl.href),
+    status: 'loading',
+    rowCount: 0,
+    groupUrl: parsedUrl.href,
+    type: 'source'
+  });
+
+  let content;
+  try {
+    content = await fetchRemoteInventoryText(parsedUrl.href);
+  } catch (error) {
+    setRemoteInventoryLoad({
+      key: parsedUrl.href,
+      url: parsedUrl.href,
+      name: formatRemoteInventorySourceLabel(parsedUrl.href),
+      status: 'failed',
+      rowCount: 0,
+      groupUrl: parsedUrl.href,
+      type: 'source',
+      error: error.message || '远程价格源读取失败'
+    });
+    throw error;
+  }
+
   const manifestSources = parseRemoteInventoryManifestSources(content, parsedUrl);
   if (manifestSources.length) {
     const data = await importRemoteInventoryManifest(parsedUrl, manifestSources);
@@ -285,10 +312,35 @@ async function importRemoteInventorySource(sourceUrl, options = {}) {
   }
 
   const filename = getRemoteInventoryFilename(parsedUrl);
-  const data = await importRemoteInventoryContent({
-    content,
-    filename,
-    sourceUrl: parsedUrl.href
+  let data;
+  try {
+    data = await importRemoteInventoryContent({
+      content,
+      filename,
+      sourceUrl: parsedUrl.href
+    });
+  } catch (error) {
+    setRemoteInventoryLoad({
+      key: parsedUrl.href,
+      url: parsedUrl.href,
+      name: formatRemoteInventorySourceLabel(parsedUrl.href),
+      status: 'failed',
+      rowCount: 0,
+      groupUrl: parsedUrl.href,
+      type: 'source',
+      error: error.message || '远程价格源解析失败'
+    });
+    throw error;
+  }
+
+  setRemoteInventoryLoad({
+    key: parsedUrl.href,
+    url: parsedUrl.href,
+    name: formatRemoteInventorySourceLabel(parsedUrl.href),
+    status: 'ok',
+    rowCount: Number(data.imported?.rowCount || 0),
+    groupUrl: parsedUrl.href,
+    type: 'source'
   });
 
   if (options.persist && isStaticMode()) saveRemoteInventoryUrl(parsedUrl.href);
@@ -298,14 +350,38 @@ async function importRemoteInventorySource(sourceUrl, options = {}) {
 async function importRemoteInventoryManifest(manifestUrl, sources) {
   if (isStaticMode()) {
     state.staticInventoryRows = state.staticInventoryRows.filter((row) => row.__remoteInventoryUrl !== manifestUrl.href);
+    clearRemoteInventoryLoadGroup(manifestUrl.href);
     rebuildStaticImportNames();
   }
+
+  setRemoteInventoryLoad({
+    key: manifestUrl.href,
+    url: manifestUrl.href,
+    name: `${formatRemoteInventorySourceLabel(manifestUrl.href)} 清单`,
+    status: 'loading',
+    rowCount: 0,
+    sourceCount: sources.length,
+    failedCount: 0,
+    groupUrl: manifestUrl.href,
+    type: 'manifest'
+  });
 
   let rowCount = 0;
   let failedCount = 0;
   let providers = null;
 
   for (const source of sources) {
+    const sourceKey = `${manifestUrl.href}|${source.url}`;
+    setRemoteInventoryLoad({
+      key: sourceKey,
+      url: source.url,
+      name: source.name,
+      status: 'loading',
+      rowCount: 0,
+      groupUrl: manifestUrl.href,
+      type: 'manifest-source'
+    });
+
     try {
       const content = await fetchRemoteInventoryText(source.url);
       const filename = getRemoteInventoryFilename(parseRemoteInventoryUrl(source.url));
@@ -316,12 +392,45 @@ async function importRemoteInventoryManifest(manifestUrl, sources) {
         sourceName: source.name,
         fieldMap: source.fieldMap
       }, { replaceExisting: false });
-      rowCount += Number(data.imported?.rowCount || 0);
+      const sourceRowCount = Number(data.imported?.rowCount || 0);
+      rowCount += sourceRowCount;
       providers = data.providers || providers;
-    } catch {
+      setRemoteInventoryLoad({
+        key: sourceKey,
+        url: source.url,
+        name: source.name,
+        status: 'ok',
+        rowCount: sourceRowCount,
+        groupUrl: manifestUrl.href,
+        type: 'manifest-source'
+      });
+    } catch (error) {
       failedCount += 1;
+      setRemoteInventoryLoad({
+        key: sourceKey,
+        url: source.url,
+        name: source.name,
+        status: 'failed',
+        rowCount: 0,
+        groupUrl: manifestUrl.href,
+        type: 'manifest-source',
+        error: error.message || '远程供应商子源读取失败'
+      });
     }
   }
+
+  setRemoteInventoryLoad({
+    key: manifestUrl.href,
+    url: manifestUrl.href,
+    name: `${formatRemoteInventorySourceLabel(manifestUrl.href)} 清单`,
+    status: rowCount ? (failedCount ? 'partial' : 'ok') : 'failed',
+    rowCount,
+    sourceCount: sources.length,
+    failedCount,
+    groupUrl: manifestUrl.href,
+    type: 'manifest',
+    ...(rowCount ? {} : { error: '远程价格源清单没有加载到可用价格。' })
+  });
 
   if (!rowCount) throw new Error('远程价格源清单没有加载到可用价格。');
   return {
@@ -407,6 +516,9 @@ async function clearSavedRemoteInventorySources() {
   if (!isStaticMode() || state.loading) return;
   const savedUrls = new Set(state.savedRemoteInventoryUrls);
   state.staticInventoryRows = state.staticInventoryRows.filter((row) => !savedUrls.has(row.__remoteInventoryUrl));
+  state.remoteInventoryLoads = state.remoteInventoryLoads.filter((load) =>
+    !savedUrls.has(load.groupUrl || '') && !savedUrls.has(load.url || '')
+  );
   rebuildStaticImportNames();
   state.savedRemoteInventoryUrls = [];
   storeSavedRemoteInventoryUrls([]);
@@ -689,14 +801,27 @@ function renderRates(container, hotel) {
 function renderProviderStatus(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
   const remoteCount = Number(providers?.localInventory?.remoteCount || 0);
+  const remoteHealth = providers?.localInventory?.remoteInventory || {};
+  const remoteLoadCount = Number(remoteHealth.loadCount || 0);
+  const remoteHealthyCount = Number(remoteHealth.okCount || 0) + Number(remoteHealth.partialCount || 0);
+  const remoteFailedCount = Number(remoteHealth.failedCount || 0);
+  const remoteLoadingCount = Number(remoteHealth.loadingCount || 0);
   const supplierApiReady = Boolean(providers?.supplierApi?.configured);
   const supplierApiCount = Number(providers?.supplierApi?.apiCount || 0);
   const apiReady = Boolean(providers?.amadeus?.configured);
   const coverage = providers?.localInventory?.coverage;
+  const sourceErrors = [
+    ...(providers?.localInventory?.sourceErrors || []),
+    ...(providers?.supplierApi?.sourceErrors || [])
+  ];
+  const remoteHealthLabel = remoteLoadCount
+    ? `${remoteHealthyCount}/${remoteLoadCount} 正常${remoteLoadingCount ? ` · ${remoteLoadingCount} 加载中` : ''}${remoteFailedCount ? ` · ${remoteFailedCount} 失败` : ''}`
+    : remoteCount ? `${remoteCount} 源` : '未接入';
+  const remoteHealthState = remoteFailedCount ? 'warn' : remoteHealthyCount ? 'on' : remoteCount ? 'warn' : '';
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
     ['真实覆盖城市', coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
-    ['远程供应商文件', remoteCount ? `${remoteCount} 源` : '未接入', remoteCount ? 'on' : ''],
+    ['远程供应商文件', remoteHealthLabel, remoteHealthState],
     ['实时供应商 API', supplierApiReady ? `${supplierApiCount || 1} 源` : '未配置', supplierApiReady ? 'on' : ''],
     ['Amadeus API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
     ['示例价格库', `${providers?.demo?.cities || state.cities.length} 城`, 'demo']
@@ -710,9 +835,54 @@ function renderProviderStatus(providers) {
         <b>${escapeHtml(value)}</b>
       </div>
     `).join('')}
+    ${renderRemoteInventoryHealth(remoteHealth)}
+    ${renderProviderErrorSummary(sourceErrors)}
   `;
   elements.coverageDownloadButton.disabled = !localReady;
   elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : supplierApiReady ? '实时供应商 API 已配置' : apiReady ? 'Amadeus API 已配置' : '全国示例价格库';
+}
+
+function renderRemoteInventoryHealth(remoteHealth = {}) {
+  const loads = (remoteHealth.loads || [])
+    .filter((load) => load && load.status)
+    .slice(0, 5);
+  if (!loads.length) return '';
+
+  return `
+    <div class="provider-health">
+      ${loads.map((load) => `
+        <div class="provider-health-row">
+          <span><i class="status-dot ${escapeAttribute(getRemoteLoadStatusClass(load.status))}"></i>${escapeHtml(load.name || formatRemoteInventorySourceLabel(load.url || ''))}</span>
+          <b>${escapeHtml(formatRemoteLoadStatus(load))}</b>
+        </div>
+      `).join('')}
+      ${(remoteHealth.loads || []).length > loads.length ? `<p>还有 ${(remoteHealth.loads || []).length - loads.length} 个远程源未展开</p>` : ''}
+    </div>
+  `;
+}
+
+function renderProviderErrorSummary(sourceErrors) {
+  const errors = (sourceErrors || []).filter(Boolean).slice(0, 3);
+  if (!errors.length) return '';
+  return `
+    <div class="provider-errors">
+      ${errors.map((message) => `<p>${escapeHtml(message)}</p>`).join('')}
+    </div>
+  `;
+}
+
+function getRemoteLoadStatusClass(status) {
+  if (status === 'ok') return 'on';
+  if (status === 'partial' || status === 'failed') return 'warn';
+  return '';
+}
+
+function formatRemoteLoadStatus(load) {
+  if (load.status === 'loading') return '加载中';
+  if (load.status === 'failed') return '失败';
+  const rowText = Number(load.rowCount || 0) ? `${formatNumber(load.rowCount)} 行` : '无价格';
+  if (load.status === 'partial') return `${rowText} · ${load.failedCount || 0} 失败`;
+  return rowText;
 }
 
 async function syncProviderPanels(providers) {
@@ -917,11 +1087,27 @@ function countStaticBy(values) {
 
 function getStaticProviderStatus() {
   const localReady = state.staticInventoryRows.length > 0;
+  const remoteLoads = state.remoteInventoryLoads.map((load) => ({ ...load }));
+  const remoteSourceLoads = remoteLoads.filter((load) => load.type !== 'manifest');
+  const failedRemoteLoads = remoteSourceLoads.filter((load) => load.status === 'failed');
   return {
     localInventory: {
       configured: localReady,
       readable: localReady,
       readableCount: state.staticImportNames.length,
+      remoteCount: remoteSourceLoads.filter((load) => load.status === 'ok' || load.status === 'partial').length,
+      sourceErrors: failedRemoteLoads.map((load) => `${load.name || '远程价格源'}：${load.error || '读取失败'}`),
+      remoteInventory: {
+        configured: state.savedRemoteInventoryUrls.length > 0 || remoteLoads.length > 0,
+        urlCount: state.savedRemoteInventoryUrls.length,
+        loadCount: remoteSourceLoads.length,
+        manifestCount: remoteLoads.length - remoteSourceLoads.length,
+        okCount: remoteSourceLoads.filter((load) => load.status === 'ok').length,
+        partialCount: remoteSourceLoads.filter((load) => load.status === 'partial').length,
+        failedCount: failedRemoteLoads.length,
+        loadingCount: remoteSourceLoads.filter((load) => load.status === 'loading').length,
+        loads: remoteLoads
+      },
       importedCount: state.staticImportNames.length,
       importedFiles: state.staticImportNames.map((filename) => ({ filename })),
       coverage: localReady ? summarizeStaticInventoryCoverage() : null
@@ -1070,6 +1256,38 @@ function formatRemoteInventorySourceLabel(sourceUrl) {
   } catch {
     return '远程价格源';
   }
+}
+
+function setRemoteInventoryLoad(load) {
+  if (!isStaticMode()) return;
+  const key = load.key || load.url;
+  if (!key) return;
+  const nextLoad = {
+    key,
+    url: load.url || '',
+    name: load.name || formatRemoteInventorySourceLabel(load.url || ''),
+    status: load.status || 'loading',
+    rowCount: Number(load.rowCount || 0),
+    sourceCount: Number(load.sourceCount || 0),
+    failedCount: Number(load.failedCount || 0),
+    groupUrl: load.groupUrl || load.url || '',
+    type: load.type || 'source',
+    error: load.error || '',
+    loadedAt: new Date().toISOString()
+  };
+  const index = state.remoteInventoryLoads.findIndex((item) => item.key === key);
+  if (index >= 0) {
+    state.remoteInventoryLoads.splice(index, 1, nextLoad);
+  } else {
+    state.remoteInventoryLoads.unshift(nextLoad);
+  }
+}
+
+function clearRemoteInventoryLoadGroup(groupUrl) {
+  if (!isStaticMode()) return;
+  state.remoteInventoryLoads = state.remoteInventoryLoads.filter((load) =>
+    load.groupUrl !== groupUrl && load.url !== groupUrl && load.key !== groupUrl
+  );
 }
 
 function searchStaticHotels(query) {
