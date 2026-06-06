@@ -50,8 +50,12 @@ export function createHotelServer() {
         return sendJson(response, await getProviderStatus());
       }
 
-      if (url.pathname === '/api/coverage') {
-        return sendJson(response, await getLocalInventoryCoverage());
+      if (url.pathname === '/api/coverage' || url.pathname === '/api/coverage.csv') {
+        const coverage = await getLocalInventoryCoverage();
+        if (url.pathname.endsWith('.csv') || url.searchParams.get('format') === 'csv') {
+          return sendCoverageCsv(response, coverage);
+        }
+        return sendJson(response, coverage);
       }
 
       if (url.pathname === '/api/imports') {
@@ -399,6 +403,34 @@ async function serveStatic(pathname, response) {
 function sendJson(response, payload, status = 200) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(payload));
+}
+
+function sendCoverageCsv(response, coverage) {
+  const rows = [
+    ['province', 'city', 'covered', 'hotelCount', 'rowCount'],
+    ...(coverage.cityCoverage || []).map((item) => [
+      item.province,
+      item.city,
+      item.covered ? 'yes' : 'no',
+      item.hotelCount || 0,
+      item.rowCount || 0
+    ])
+  ];
+  const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+  sendCsv(response, csv, 'hotel-coverage.csv');
+}
+
+function sendCsv(response, csv, filename) {
+  response.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${filename}"`
+  });
+  response.end(`\uFEFF${csv}\n`);
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 async function readJsonBody(request) {

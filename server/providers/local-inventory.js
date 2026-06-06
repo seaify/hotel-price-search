@@ -269,12 +269,22 @@ function buildInventoryCoverage(rows) {
   const normalized = rows
     .map((row, index) => normalizeHotel(row, index, 1))
     .filter((hotel) => hotel.available && hotel.city);
+  const mergedHotels = mergeHotelRates(normalized);
   const citySet = new Set(normalized.map((hotel) => hotel.city));
   const provinceSet = new Set(normalized.map((hotel) => hotel.province).filter(Boolean));
   const coveredCityItems = cityCatalog.filter((city) => citySet.has(city.city));
   const coveredCitySet = new Set(coveredCityItems.map((city) => city.city));
   const coveredProvinceSet = new Set(coveredCityItems.map((city) => city.province));
   const totalProvinces = new Set(cityCatalog.map((city) => city.province)).size;
+  const rowCountByCity = countBy(normalized.map((hotel) => hotel.city));
+  const hotelCountByCity = countBy(mergedHotels.map((hotel) => hotel.city));
+  const cityCoverage = cityCatalog.map(({ province, city }) => ({
+    province,
+    city,
+    covered: coveredCitySet.has(city),
+    rowCount: rowCountByCity.get(city) || 0,
+    hotelCount: hotelCountByCity.get(city) || 0
+  }));
   const missingCities = cityCatalog
     .filter((city) => !coveredCitySet.has(city.city))
     .map(({ province, city }) => ({ province, city }));
@@ -292,15 +302,24 @@ function buildInventoryCoverage(rows) {
 
   return {
     rowCount: rows.length,
-    hotelCount: mergeHotelRates(normalized).length,
+    hotelCount: mergedHotels.length,
     coveredCities: coveredCitySet.size,
     totalCities: cityCatalog.length,
     coverageRatio: cityCatalog.length ? Number((coveredCitySet.size / cityCatalog.length).toFixed(4)) : 0,
     coveredProvinces: coveredProvinceSet.size || provinceSet.size,
     totalProvinces,
+    cityCoverage,
     missingCities,
     provinceCoverage
   };
+}
+
+function countBy(values) {
+  const counts = new Map();
+  values.filter(Boolean).forEach((value) => {
+    counts.set(value, (counts.get(value) || 0) + 1);
+  });
+  return counts;
 }
 
 function flattenInventoryDocument(parsed) {

@@ -466,8 +466,18 @@ describe('hotel search data', () => {
       assert.equal(coverage.coveredCities, 3);
       assert.equal(coverage.totalCities, cityCatalog.length);
       assert.equal(coverage.coveredProvinces, 3);
+      assert.ok(coverage.cityCoverage.some((item) => item.province === '北京' && item.city === '北京' && item.covered && item.hotelCount === 1));
+      assert.ok(coverage.cityCoverage.some((item) => item.province === '广东' && item.city === '广州' && !item.covered && item.hotelCount === 0));
       assert.ok(coverage.missingCities.some((item) => item.province === '广东' && item.city === '广州'));
       assert.ok(coverage.provinceCoverage.some((item) => item.province === '广东' && item.coveredCities === 1 && item.totalCities === 21));
+
+      const csvResponse = await fetch(`${baseUrl}/api/coverage?format=csv`);
+      const csv = await csvResponse.text();
+      assert.equal(csvResponse.status, 200);
+      assert.match(csvResponse.headers.get('content-type'), /text\/csv/);
+      assert.match(csv, /province,city,covered,hotelCount,rowCount/);
+      assert.match(csv, /北京,北京,yes,1,1/);
+      assert.match(csv, /广东,广州,no,0,0/);
 
       const statusResponse = await fetch(`${baseUrl}/api/status`);
       const status = await statusResponse.json();

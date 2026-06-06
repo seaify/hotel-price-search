@@ -83,7 +83,7 @@ npm start
 - 多供应商文件合并，同酒店保留多报价并优先显示最低价
 - 网页上传供应商 CSV/JSON/JSONL，无需重启服务即可查询导入价格
 - `/api/status` 查看当前供应商接入状态
-- `/api/coverage` 查看真实库存全国覆盖率
+- `/api/coverage` 查看真实库存全国覆盖率，`/api/coverage?format=csv` 或 `/api/coverage.csv` 可下载逐城市覆盖/缺口清单
 - `/api/imports` 查看或上传供应商文件
 
 ## 验证
