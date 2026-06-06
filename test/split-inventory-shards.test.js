@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { auditInventoryCoverage } from '../scripts/audit-inventory-coverage.js';
@@ -80,22 +81,76 @@ describe('inventory shard splitter', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('loads gzip-compressed local CSV supplier files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-gzip-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide.csv.gz');
+    const csv = [
+      'id,name,province,city,source,price',
+      'hz-1,杭州压缩拆分酒店,浙江,杭州,压缩供应商,588',
+      'nj-1,南京压缩拆分酒店,江苏,南京,压缩供应商,688'
+    ].join('\n');
+    await writeFile(inputFile, gzipSync(Buffer.from(csv, 'utf8')));
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('杭州')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('南京')));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads gzip-compressed remote JSON Lines supplier URLs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-remote-gzip-shards-'));
+    const jsonl = [
+      JSON.stringify({ id: 'cd-1', name: '成都远程压缩酒店', province: '四川', city: '成都', source: '远程压缩供应商', price: 588 }),
+      JSON.stringify({ id: 'wh-1', name: '武汉远程压缩酒店', province: '湖北', city: '武汉', source: '远程压缩供应商', price: 688 })
+    ].join('\n');
+    const inventoryServer = await startInventoryServer(gzipSync(Buffer.from(jsonl, 'utf8')), {
+      path: '/supplier.jsonl.gz',
+      contentType: 'application/gzip'
+    });
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inventoryServer.url],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('成都')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('武汉')));
+    } finally {
+      await inventoryServer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
-async function startInventoryServer(content) {
+async function startInventoryServer(content, options = {}) {
+  const routePath = options.path || '/supplier.csv';
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url, 'http://127.0.0.1');
-    if (requestUrl.pathname !== '/supplier.csv') {
+    if (requestUrl.pathname !== routePath) {
       response.writeHead(404).end();
       return;
     }
-    response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8' });
+    response.writeHead(200, { 'content-type': options.contentType || 'text/csv; charset=utf-8' });
     response.end(content);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return {
-    url: `http://127.0.0.1:${port}/supplier.csv?signature=a,b;c`,
+    url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }

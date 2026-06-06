@@ -397,7 +397,7 @@ npm run build:pages
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
 ```
 
-如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片：
+如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片。输入支持 CSV/JSON/JSONL/NDJSON，也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`：
 
 供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
 
