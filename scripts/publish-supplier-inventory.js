@@ -83,6 +83,10 @@ function getGateOptions(options) {
     minRowsPerCity: getNonNegativeInteger(options.minRowsPerCity, 1),
     minPricedHotelsPerCity: getNonNegativeInteger(options.minPricedHotelsPerCity, 1),
     minPricedRowsPerCity: getNonNegativeInteger(options.minPricedRowsPerCity, 1),
+    minTotalHotels: getNonNegativeInteger(options.minTotalHotels, 0),
+    minTotalRows: getNonNegativeInteger(options.minTotalRows, 0),
+    minTotalPricedHotels: getNonNegativeInteger(options.minTotalPricedHotels, 0),
+    minTotalPricedRows: getNonNegativeInteger(options.minTotalPricedRows, 0),
     maxPriceAgeHours: getNonNegativeNumber(options.maxPriceAgeHours, 0),
     referenceTime: options.referenceTime || ''
   };
@@ -130,6 +134,10 @@ function parseArgs(argv) {
     else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
     else if (arg === '--min-priced-hotels-per-city') options.minPricedHotelsPerCity = argv[++index];
     else if (arg === '--min-priced-rows-per-city') options.minPricedRowsPerCity = argv[++index];
+    else if (arg === '--min-total-hotels') options.minTotalHotels = argv[++index];
+    else if (arg === '--min-total-rows') options.minTotalRows = argv[++index];
+    else if (arg === '--min-total-priced-hotels') options.minTotalPricedHotels = argv[++index];
+    else if (arg === '--min-total-priced-rows') options.minTotalPricedRows = argv[++index];
     else if (arg === '--max-price-age-hours') options.maxPriceAgeHours = argv[++index];
     else if (arg === '--reference-time') options.referenceTime = argv[++index];
     else if (arg === '--no-clean') options.clean = false;
@@ -157,6 +165,7 @@ function formatText(result) {
     if (coverage.missingCities.length) lines.push(`Missing cities: ${formatCityList(coverage.missingCities)}`);
     if (coverage.citiesBelowMinimums.length) lines.push(`Below inventory minimums: ${formatCityList(coverage.citiesBelowMinimums)}`);
     if (coverage.citiesBelowPriceMinimums.length) lines.push(`Below priced minimums: ${formatCityList(coverage.citiesBelowPriceMinimums)}`);
+    if (coverage.totalMinimumFailures.length) lines.push(`Below total minimums: ${formatTotalMinimumFailures(coverage.totalMinimumFailures)}`);
     if (coverage.citiesWithStalePrices.length) lines.push(`Stale prices: ${formatCityList(coverage.citiesWithStalePrices)}`);
     if (verification.split.skippedRowCount) {
       const skipped = verification.split.skippedRows.slice(0, 8)
@@ -172,6 +181,10 @@ function formatCityList(cities) {
   return cities.slice(0, 12)
     .map((item) => `${item.province}/${item.city}`)
     .join(', ') + (cities.length > 12 ? ` ... +${cities.length - 12}` : '');
+}
+
+function formatTotalMinimumFailures(failures) {
+  return failures.map((item) => `${item.label} ${item.actual}/${item.minimum}`).join(', ');
 }
 
 function printHelp() {
@@ -191,6 +204,10 @@ Options:
   --min-rows-per-city N           Default: 1
   --min-priced-hotels-per-city N  Default: 1
   --min-priced-rows-per-city N    Default: 1
+  --min-total-hotels N            Require at least N hotels nationwide
+  --min-total-rows N              Require at least N rows nationwide
+  --min-total-priced-hotels N     Require at least N priced hotels nationwide
+  --min-total-priced-rows N       Require at least N priced rows nationwide
   --max-price-age-hours N         Require fresh per-city updatedAt evidence
   --reference-time <time>         Reference timestamp for freshness checks
   --no-clean           Keep existing shard files instead of replacing output dir

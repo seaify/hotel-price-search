@@ -36,6 +36,10 @@ export async function verifySupplierInventory(options = {}) {
       minRowsPerCity: getNonNegativeInteger(options.minRowsPerCity, 1),
       minPricedHotelsPerCity: getNonNegativeInteger(options.minPricedHotelsPerCity, 1),
       minPricedRowsPerCity: getNonNegativeInteger(options.minPricedRowsPerCity, 1),
+      minTotalHotels: getNonNegativeInteger(options.minTotalHotels, 0),
+      minTotalRows: getNonNegativeInteger(options.minTotalRows, 0),
+      minTotalPricedHotels: getNonNegativeInteger(options.minTotalPricedHotels, 0),
+      minTotalPricedRows: getNonNegativeInteger(options.minTotalPricedRows, 0),
       maxPriceAgeHours: getNonNegativeNumber(options.maxPriceAgeHours, 0),
       referenceTime: options.referenceTime || '',
       checkIn: options.checkIn || '',
@@ -74,11 +78,19 @@ function buildNextCommands(inputFiles, options) {
   const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 1);
   const minPricedHotelsPerCity = getNonNegativeInteger(options.minPricedHotelsPerCity, 1);
   const minPricedRowsPerCity = getNonNegativeInteger(options.minPricedRowsPerCity, 1);
+  const minTotalHotels = getNonNegativeInteger(options.minTotalHotels, 0);
+  const minTotalRows = getNonNegativeInteger(options.minTotalRows, 0);
+  const minTotalPricedHotels = getNonNegativeInteger(options.minTotalPricedHotels, 0);
+  const minTotalPricedRows = getNonNegativeInteger(options.minTotalPricedRows, 0);
   const maxPriceAgeHours = getNonNegativeNumber(options.maxPriceAgeHours, 0);
   if (minHotelsPerCity) envParts.push(`HOTEL_PAGES_MIN_HOTELS_PER_CITY=${minHotelsPerCity}`);
   if (minRowsPerCity) envParts.push(`HOTEL_PAGES_MIN_ROWS_PER_CITY=${minRowsPerCity}`);
   if (minPricedHotelsPerCity) envParts.push(`HOTEL_PAGES_MIN_PRICED_HOTELS_PER_CITY=${minPricedHotelsPerCity}`);
   if (minPricedRowsPerCity) envParts.push(`HOTEL_PAGES_MIN_PRICED_ROWS_PER_CITY=${minPricedRowsPerCity}`);
+  if (minTotalHotels) envParts.push(`HOTEL_PAGES_MIN_TOTAL_HOTELS=${minTotalHotels}`);
+  if (minTotalRows) envParts.push(`HOTEL_PAGES_MIN_TOTAL_ROWS=${minTotalRows}`);
+  if (minTotalPricedHotels) envParts.push(`HOTEL_PAGES_MIN_TOTAL_PRICED_HOTELS=${minTotalPricedHotels}`);
+  if (minTotalPricedRows) envParts.push(`HOTEL_PAGES_MIN_TOTAL_PRICED_ROWS=${minTotalPricedRows}`);
   if (options.checkIn) envParts.push(`HOTEL_PAGES_COVERAGE_CHECK_IN=${quoteShell(options.checkIn)}`);
   if (options.checkOut) envParts.push(`HOTEL_PAGES_COVERAGE_CHECK_OUT=${quoteShell(options.checkOut)}`);
   if (maxPriceAgeHours) envParts.push(`HOTEL_PAGES_MAX_PRICE_AGE_HOURS=${maxPriceAgeHours}`);
@@ -149,6 +161,10 @@ function parseArgs(argv) {
     else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
     else if (arg === '--min-priced-hotels-per-city') options.minPricedHotelsPerCity = argv[++index];
     else if (arg === '--min-priced-rows-per-city') options.minPricedRowsPerCity = argv[++index];
+    else if (arg === '--min-total-hotels') options.minTotalHotels = argv[++index];
+    else if (arg === '--min-total-rows') options.minTotalRows = argv[++index];
+    else if (arg === '--min-total-priced-hotels') options.minTotalPricedHotels = argv[++index];
+    else if (arg === '--min-total-priced-rows') options.minTotalPricedRows = argv[++index];
     else if (arg === '--max-price-age-hours') options.maxPriceAgeHours = argv[++index];
     else if (arg === '--reference-time') options.referenceTime = argv[++index];
     else if (arg === '--keep-temp') options.keepTemp = true;
@@ -176,6 +192,9 @@ function formatText(result) {
   }
   if (coverage.citiesBelowPriceMinimums.length) {
     lines.push(`Below priced minimums: ${formatCityList(coverage.citiesBelowPriceMinimums)}`);
+  }
+  if (coverage.totalMinimumFailures.length) {
+    lines.push(`Below total minimums: ${formatTotalMinimumFailures(coverage.totalMinimumFailures)}`);
   }
   if (coverage.citiesWithStalePrices.length) {
     lines.push(`Stale prices: ${formatCityList(coverage.citiesWithStalePrices)}`);
@@ -258,6 +277,10 @@ function formatCityList(cities) {
     .join(', ') + (cities.length > 12 ? ` ... +${cities.length - 12}` : '');
 }
 
+function formatTotalMinimumFailures(failures) {
+  return failures.map((item) => `${item.label} ${item.actual}/${item.minimum}`).join(', ');
+}
+
 function printHelp() {
   console.log(`Usage: node scripts/verify-supplier-inventory.js --input <file-or-url> [options]
 
@@ -272,6 +295,10 @@ Options:
   --min-rows-per-city N           Default: 1
   --min-priced-hotels-per-city N  Default: 1
   --min-priced-rows-per-city N    Default: 1
+  --min-total-hotels N            Require at least N hotels nationwide
+  --min-total-rows N              Require at least N rows nationwide
+  --min-total-priced-hotels N     Require at least N priced hotels nationwide
+  --min-total-priced-rows N       Require at least N priced rows nationwide
   --max-price-age-hours N         Require fresh per-city updatedAt evidence
   --reference-time <time>         Reference timestamp for freshness checks
   --keep-temp          Keep temporary split output for inspection

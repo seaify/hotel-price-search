@@ -47,6 +47,22 @@ async function preparePagesInventory(rootDir, options) {
     options.minPricedRowsPerCity ?? process.env.HOTEL_PAGES_MIN_PRICED_ROWS_PER_CITY,
     0
   );
+  const minTotalHotels = getNonNegativeInteger(
+    options.minTotalHotels ?? process.env.HOTEL_PAGES_MIN_TOTAL_HOTELS,
+    0
+  );
+  const minTotalRows = getNonNegativeInteger(
+    options.minTotalRows ?? process.env.HOTEL_PAGES_MIN_TOTAL_ROWS,
+    0
+  );
+  const minTotalPricedHotels = getNonNegativeInteger(
+    options.minTotalPricedHotels ?? process.env.HOTEL_PAGES_MIN_TOTAL_PRICED_HOTELS,
+    0
+  );
+  const minTotalPricedRows = getNonNegativeInteger(
+    options.minTotalPricedRows ?? process.env.HOTEL_PAGES_MIN_TOTAL_PRICED_ROWS,
+    0
+  );
   const maxPriceAgeHours = getNonNegativeNumber(
     options.maxPriceAgeHours ?? process.env.HOTEL_PAGES_MAX_PRICE_AGE_HOURS,
     0
@@ -66,6 +82,10 @@ async function preparePagesInventory(rootDir, options) {
     || minRowsPerCity > 0
     || minPricedHotelsPerCity > 0
     || minPricedRowsPerCity > 0
+    || minTotalHotels > 0
+    || minTotalRows > 0
+    || minTotalPricedHotels > 0
+    || minTotalPricedRows > 0
     || maxPriceAgeHours > 0;
   const manifestPath = options.manifestPath || `${publicDir}/hotel-inventory.manifest.json`;
   let manifest = null;
@@ -90,6 +110,10 @@ async function preparePagesInventory(rootDir, options) {
       minRowsPerCity,
       minPricedHotelsPerCity,
       minPricedRowsPerCity,
+      minTotalHotels,
+      minTotalRows,
+      minTotalPricedHotels,
+      minTotalPricedRows,
       maxPriceAgeHours,
       referenceTime,
       checkIn,
@@ -158,6 +182,9 @@ function formatCoverageFailure(coverage) {
     .slice(0, 8)
     .map((item) => `${item.province}/${item.city} priced hotels ${item.pricedHotelCount}/${item.minPricedHotelCount}, priced rows ${item.pricedRowCount}/${item.minPricedRowCount}`)
     .join(', ');
+  const belowTotalMinimums = coverage.totalMinimumFailures
+    .map((item) => `${item.label} ${item.actual}/${item.minimum}`)
+    .join(', ');
   const stalePrices = coverage.citiesWithStalePrices
     .slice(0, 8)
     .map((item) => `${item.province}/${item.city} updated ${item.updatedAt || 'missing'}`)
@@ -168,6 +195,7 @@ function formatCoverageFailure(coverage) {
     withoutHotelStats ? `Without hotel stats: ${withoutHotelStats}${coverage.citiesWithoutHotelStats.length > 8 ? ` ... +${coverage.citiesWithoutHotelStats.length - 8}` : ''}` : '',
     belowMinimums ? `Below minimums: ${belowMinimums}${coverage.citiesBelowMinimums.length > 8 ? ` ... +${coverage.citiesBelowMinimums.length - 8}` : ''}` : '',
     belowPriceMinimums ? `Below price minimums: ${belowPriceMinimums}${coverage.citiesBelowPriceMinimums.length > 8 ? ` ... +${coverage.citiesBelowPriceMinimums.length - 8}` : ''}` : '',
+    belowTotalMinimums ? `Below total minimums: ${belowTotalMinimums}` : '',
     stalePrices ? `Stale prices: ${stalePrices}${coverage.citiesWithStalePrices.length > 8 ? ` ... +${coverage.citiesWithStalePrices.length - 8}` : ''}` : '',
     unscoped ? `Unscoped sources: ${unscoped}` : '',
     unknown ? `Unknown destinations: ${unknown}` : ''

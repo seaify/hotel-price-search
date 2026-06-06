@@ -33,6 +33,8 @@ describe('supplier inventory verifier', () => {
         inputFiles: [inputFile],
         checkIn: '2026-06-06',
         checkOut: '2026-06-07',
+        minTotalHotels: cityCatalog.length,
+        minTotalPricedRows: cityCatalog.length,
         maxPriceAgeHours: 24,
         referenceTime: '2026-06-06T18:00:00Z'
       });
@@ -44,6 +46,8 @@ describe('supplier inventory verifier', () => {
       assert.equal(result.nextCommands.length, 2);
       assert.match(result.nextCommands[0], /split:inventory-shards/);
       assert.match(result.nextCommands[1], /HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true/);
+      assert.match(result.nextCommands[1], new RegExp(`HOTEL_PAGES_MIN_TOTAL_HOTELS=${cityCatalog.length}`));
+      assert.match(result.nextCommands[1], new RegExp(`HOTEL_PAGES_MIN_TOTAL_PRICED_ROWS=${cityCatalog.length}`));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

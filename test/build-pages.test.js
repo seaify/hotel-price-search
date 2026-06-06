@@ -117,6 +117,33 @@ describe('GitHub Pages builder', () => {
     }
   });
 
+  it('rejects manifests that do not meet configured nationwide totals', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-pages-total-minimums-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{
+        name: '总量不足外部源',
+        url: 'https://example.com/inventory/all.csv',
+        provinces,
+        rowCount: 100,
+        hotelCount: 80,
+        pricedRowCount: 60,
+        pricedHotelCount: 40
+      }]
+    }));
+
+    try {
+      await assert.rejects(
+        () => buildPages({ rootDir: root, minTotalHotels: 100, minTotalPricedRows: 70 }),
+        /Below total minimums: hotels 80\/100, priced rows 60\/70/
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects manifests without per-city availability for the configured stay dates', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-pages-date-evidence-'));
     await mkdir(join(root, 'public'), { recursive: true });

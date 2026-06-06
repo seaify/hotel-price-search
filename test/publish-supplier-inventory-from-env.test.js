@@ -16,6 +16,8 @@ describe('supplier inventory env publisher config', () => {
       HOTEL_SUPPLIER_CHECK_OUT: '2026-06-07',
       HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY: '20',
       HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY: '20',
+      HOTEL_SUPPLIER_MIN_TOTAL_HOTELS: '100000',
+      HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS: '120000',
       HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS: '6'
     }, '/repo');
 
@@ -31,6 +33,8 @@ describe('supplier inventory env publisher config', () => {
     assert.equal(options.checkOut, '2026-06-07');
     assert.equal(options.minHotelsPerCity, '20');
     assert.equal(options.minPricedHotelsPerCity, '20');
+    assert.equal(options.minTotalHotels, '100000');
+    assert.equal(options.minTotalPricedRows, '120000');
     assert.equal(options.maxPriceAgeHours, '6');
   });
 

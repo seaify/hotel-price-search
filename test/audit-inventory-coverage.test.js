@@ -175,6 +175,47 @@ describe('inventory coverage audit', () => {
     }
   });
 
+  it('flags nationwide totals below configured minimums', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-total-minimums-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [
+        {
+          name: '全国浅库存源',
+          url: 'inventory/all.csv',
+          provinces,
+          rowCount: 100,
+          hotelCount: 80,
+          pricedRowCount: 60,
+          pricedHotelCount: 40
+        }
+      ]
+    }));
+
+    try {
+      const summary = await auditInventoryCoverage({
+        rootDir: root,
+        minTotalHotels: 100,
+        minTotalRows: 120,
+        minTotalPricedHotels: 50,
+        minTotalPricedRows: 70
+      });
+
+      assert.equal(summary.coveredCities, cityCatalog.length);
+      assert.equal(summary.totalMinimumFailures.length, 4);
+      assert.deepEqual(summary.totalMinimumFailures.map((item) => item.field), [
+        'hotelCount',
+        'rowCount',
+        'pricedHotelCount',
+        'pricedRowCount'
+      ]);
+      assert.equal(summary.passed, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('filters city inventory evidence by requested stay dates', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-date-evidence-'));
     await mkdir(join(root, 'public'), { recursive: true });
