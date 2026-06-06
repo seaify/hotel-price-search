@@ -27,16 +27,44 @@ on:
         description: Optional minimum hotels required in every catalog city
         required: false
         type: string
+      min_rows_per_city:
+        description: Optional minimum inventory rows required in every catalog city
+        required: false
+        type: string
       min_priced_hotels_per_city:
         description: Optional minimum priced hotels required in every catalog city
+        required: false
+        type: string
+      min_priced_rows_per_city:
+        description: Optional minimum priced rows required in every catalog city
         required: false
         type: string
       min_total_hotels:
         description: Optional minimum total hotels required nationwide
         required: false
         type: string
+      min_total_rows:
+        description: Optional minimum total rows required nationwide
+        required: false
+        type: string
+      min_total_priced_hotels:
+        description: Optional minimum total priced hotels required nationwide
+        required: false
+        type: string
       min_total_priced_rows:
         description: Optional minimum total priced rows required nationwide
+        required: false
+        type: string
+      max_price_age_hours:
+        description: Optional maximum age of per-city updatedAt price evidence
+        required: false
+        type: string
+      freshness_reference_time:
+        description: Optional reference timestamp for max_price_age_hours
+        required: false
+        type: string
+      inventory_base_url:
+        description: Optional absolute URL prefix for generated inventory manifest URLs
         required: false
         type: string
   schedule:
@@ -53,29 +81,31 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
+      HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE: ${{ github.event.inputs.supplier_inventory_inputs || '' }}
       HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON }}
-      HOTEL_SUPPLIER_INVENTORY_INPUTS: ${{ github.event.inputs.supplier_inventory_inputs || secrets.HOTEL_SUPPLIER_INVENTORY_INPUTS }}
+      HOTEL_SUPPLIER_INVENTORY_INPUTS: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUTS }}
       HOTEL_SUPPLIER_INVENTORY_INPUT: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUT }}
       HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON }}
       HOTEL_SUPPLIER_INVENTORY_HEADERS: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_HEADERS }}
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE: ${{ github.event.inputs.supplier_source_manifest_url || '' }}
       HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON }}
-      HOTEL_SUPPLIER_SOURCE_MANIFEST_URL: ${{ github.event.inputs.supplier_source_manifest_url || secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL }}
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_URL: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL }}
       HOTEL_SUPPLIER_SOURCE_MANIFEST: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST }}
       HOTEL_SUPPLIER_FIELD_MAP_JSON: ${{ github.event.inputs.supplier_field_map_json || secrets.HOTEL_SUPPLIER_FIELD_MAP_JSON }}
       HOTEL_SUPPLIER_FIELD_MAP: ${{ secrets.HOTEL_SUPPLIER_FIELD_MAP }}
       HOTEL_SUPPLIER_CHECK_IN: ${{ github.event.inputs.check_in || vars.HOTEL_SUPPLIER_CHECK_IN || '' }}
       HOTEL_SUPPLIER_CHECK_OUT: ${{ github.event.inputs.check_out || vars.HOTEL_SUPPLIER_CHECK_OUT || '' }}
       HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY: ${{ github.event.inputs.min_hotels_per_city || vars.HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY || '1' }}
-      HOTEL_SUPPLIER_MIN_ROWS_PER_CITY: ${{ vars.HOTEL_SUPPLIER_MIN_ROWS_PER_CITY || '1' }}
+      HOTEL_SUPPLIER_MIN_ROWS_PER_CITY: ${{ github.event.inputs.min_rows_per_city || vars.HOTEL_SUPPLIER_MIN_ROWS_PER_CITY || '1' }}
       HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY: ${{ github.event.inputs.min_priced_hotels_per_city || vars.HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY || '1' }}
-      HOTEL_SUPPLIER_MIN_PRICED_ROWS_PER_CITY: ${{ vars.HOTEL_SUPPLIER_MIN_PRICED_ROWS_PER_CITY || '1' }}
+      HOTEL_SUPPLIER_MIN_PRICED_ROWS_PER_CITY: ${{ github.event.inputs.min_priced_rows_per_city || vars.HOTEL_SUPPLIER_MIN_PRICED_ROWS_PER_CITY || '1' }}
       HOTEL_SUPPLIER_MIN_TOTAL_HOTELS: ${{ github.event.inputs.min_total_hotels || vars.HOTEL_SUPPLIER_MIN_TOTAL_HOTELS || '' }}
-      HOTEL_SUPPLIER_MIN_TOTAL_ROWS: ${{ vars.HOTEL_SUPPLIER_MIN_TOTAL_ROWS || '' }}
-      HOTEL_SUPPLIER_MIN_TOTAL_PRICED_HOTELS: ${{ vars.HOTEL_SUPPLIER_MIN_TOTAL_PRICED_HOTELS || '' }}
+      HOTEL_SUPPLIER_MIN_TOTAL_ROWS: ${{ github.event.inputs.min_total_rows || vars.HOTEL_SUPPLIER_MIN_TOTAL_ROWS || '' }}
+      HOTEL_SUPPLIER_MIN_TOTAL_PRICED_HOTELS: ${{ github.event.inputs.min_total_priced_hotels || vars.HOTEL_SUPPLIER_MIN_TOTAL_PRICED_HOTELS || '' }}
       HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS: ${{ github.event.inputs.min_total_priced_rows || vars.HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS || '' }}
-      HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS: ${{ vars.HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS || '' }}
-      HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME: ${{ vars.HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME || '' }}
-      HOTEL_SUPPLIER_INVENTORY_BASE_URL: ${{ vars.HOTEL_SUPPLIER_INVENTORY_BASE_URL || '' }}
+      HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS: ${{ github.event.inputs.max_price_age_hours || vars.HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS || '' }}
+      HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME: ${{ github.event.inputs.freshness_reference_time || vars.HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME || '' }}
+      HOTEL_SUPPLIER_INVENTORY_BASE_URL: ${{ github.event.inputs.inventory_base_url || vars.HOTEL_SUPPLIER_INVENTORY_BASE_URL || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,7 +118,7 @@ jobs:
       - name: Check supplier inventory configuration
         id: config
         run: |
-          if [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUT" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_URL" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST" ]; then
+          if [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUT" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_URL" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST" ]; then
             echo "::notice title=Supplier inventory not configured::Set supplier_inventory_inputs or supplier_source_manifest_url when manually running this workflow, or configure HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON / HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON in repository secrets."
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else

@@ -71,6 +71,33 @@ describe('supplier inventory env publisher config', () => {
     assert.equal(options.fieldMap, '{"price":"rate.salePrice"}');
   });
 
+  it('lets workflow-dispatch inputs override scheduled supplier secrets', () => {
+    const options = buildPublishSupplierInventoryOptions({
+      HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE: [
+        'https://manual.example.com/today-north.xlsx?signature=a,b;c',
+        'https://manual.example.com/today-south.zip?signature=x;y,z'
+      ].join('\n'),
+      HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON: JSON.stringify([
+        'https://secret.example.com/scheduled.csv'
+      ]),
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE: 'https://manual.example.com/sources.json?signature=manual',
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON: JSON.stringify({
+        sources: [
+          {
+            name: 'scheduled-source',
+            url: 'https://secret.example.com/sources.json'
+          }
+        ]
+      })
+    }, '/repo');
+
+    assert.deepEqual(options.inputFiles, [
+      'https://manual.example.com/today-north.xlsx?signature=a,b;c',
+      'https://manual.example.com/today-south.zip?signature=x;y,z'
+    ]);
+    assert.equal(options.sourceManifest, 'https://manual.example.com/sources.json?signature=manual');
+  });
+
   it('requires at least one configured supplier inventory input', () => {
     assert.throws(
       () => buildPublishSupplierInventoryOptions({}, '/repo'),

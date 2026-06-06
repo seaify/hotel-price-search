@@ -4,9 +4,15 @@ import { publishSupplierInventory } from './publish-supplier-inventory.js';
 
 export function buildPublishSupplierInventoryOptions(env = process.env, cwd = process.cwd()) {
   const inputFiles = getInputFiles(env);
-  const sourceManifest = firstNonEmpty(env.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON, env.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL, env.HOTEL_SUPPLIER_SOURCE_MANIFEST, '');
+  const sourceManifest = firstNonEmpty(
+    env.HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE,
+    env.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON,
+    env.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL,
+    env.HOTEL_SUPPLIER_SOURCE_MANIFEST,
+    ''
+  );
   if (!inputFiles.length && !sourceManifest) {
-    throw new Error('Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, HOTEL_SUPPLIER_INVENTORY_INPUTS, HOTEL_SUPPLIER_INVENTORY_INPUT, HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON, or HOTEL_SUPPLIER_SOURCE_MANIFEST_URL before publishing supplier inventory.');
+    throw new Error('Set HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE, HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, HOTEL_SUPPLIER_INVENTORY_INPUTS, HOTEL_SUPPLIER_INVENTORY_INPUT, HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE, HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON, or HOTEL_SUPPLIER_SOURCE_MANIFEST_URL before publishing supplier inventory.');
   }
 
   const options = {
@@ -36,11 +42,18 @@ export function buildPublishSupplierInventoryOptions(env = process.env, cwd = pr
 }
 
 function getInputFiles(env) {
+  const overrideInputs = firstNonEmpty(env.HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE, '');
+  if (overrideInputs) return parseTextInputList(overrideInputs);
+
   const jsonInputs = firstNonEmpty(env.HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, '');
   if (jsonInputs) return parseJsonInputList(jsonInputs);
 
   const text = firstNonEmpty(env.HOTEL_SUPPLIER_INVENTORY_INPUTS, env.HOTEL_SUPPLIER_INVENTORY_INPUT, '');
   if (!text) return [];
+  return parseTextInputList(text);
+}
+
+function parseTextInputList(text) {
   if (text.trim().startsWith('[')) return parseJsonInputList(text);
   return text
     .split(/\r?\n/)
