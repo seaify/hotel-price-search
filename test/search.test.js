@@ -1468,6 +1468,104 @@ describe('hotel search data', () => {
     }
   });
 
+  it('retries transient live supplier API failures', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-retry-'));
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'HOTEL_SUPPLIER_API_RETRY_COUNT',
+      'HOTEL_SUPPLIER_API_RETRY_DELAY_MS',
+      'HOTEL_SUPPLIER_API_RETRY_STATUS_CODES',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    let requestCount = 0;
+    const supplierServer = createHttpServer((request, response) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        response.writeHead(503, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Retry-After': '0'
+        });
+        response.end(JSON.stringify({ error: 'temporarily_unavailable' }));
+        return;
+      }
+
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: 'retry-live-001',
+            hotelName: '广州重试实时供应商酒店',
+            province: '广东省',
+            city: '广州市',
+            price: 650,
+            source: '重试供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '重试供应商',
+      url: `http://127.0.0.1:${address.port}/retry-prices`,
+      method: 'GET',
+      retryCount: 1,
+      retryDelayMs: 1,
+      retryStatusCodes: [503]
+    });
+
+    try {
+      const result = await searchHotels({
+        city: '广州',
+        keyword: '重试实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '广州重试实时供应商酒店');
+      assert.equal(result.providers.supplierApi.retryConfigured, true);
+      assert.equal(result.providers.supplierApi.retryCount, 1);
+      assert.equal(result.providers.supplierApi.retryAttemptCount, 1);
+      assert.equal(requestCount, 2);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('fetches and caches client credentials tokens for live supplier APIs', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-auth-'));
     const envKeys = [

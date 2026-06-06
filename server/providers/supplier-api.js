@@ -6,6 +6,9 @@ import { parseInventory, searchInventoryRows } from './local-inventory.js';
 const defaultSupplierApiTimeoutMs = 10_000;
 const defaultSupplierApiCacheSeconds = 0;
 const defaultSupplierApiCacheMaxEntries = 1000;
+const defaultSupplierApiRetryCount = 0;
+const defaultSupplierApiRetryDelayMs = 250;
+const defaultSupplierApiRetryStatusCodes = [408, 429, 500, 502, 503, 504];
 const defaultSupplierCoverageProbeLimit = 1;
 const defaultSupplierCoverageProbeConcurrency = 4;
 const maxSupplierCoverageProbeConcurrency = 20;
@@ -32,6 +35,8 @@ export function getSupplierApiStatus() {
     cacheSeconds: firstSource?.cacheSeconds ?? getSupplierApiCacheSeconds(),
     cacheMaxEntries: getSupplierApiCacheMaxEntries(),
     cacheConfigured: sources.some((source) => Number(source.cacheSeconds || 0) > 0),
+    retryCount: firstSource?.retryCount ?? getSupplierApiRetryCount(),
+    retryConfigured: sources.some((source) => Number(source.retryCount || 0) > 0),
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
     authConfigured: sources.some((source) => Boolean(source.auth)),
     cityFanoutConfigured: sources.some((source) => source.cityFanout),
@@ -77,7 +82,8 @@ export async function searchSupplierApiInventory(params) {
     rowCount: rows.length,
     fanoutRequestCount: loaded.reduce((sum, source) => sum + Number(source.fanoutRequestCount || 0), 0),
     cacheHitCount: loaded.reduce((sum, source) => sum + Number(source.cacheHitCount || 0), 0),
-    cacheMissCount: loaded.reduce((sum, source) => sum + Number(source.cacheMissCount || 0), 0)
+    cacheMissCount: loaded.reduce((sum, source) => sum + Number(source.cacheMissCount || 0), 0),
+    retryAttemptCount: loaded.reduce((sum, source) => sum + Number(source.retryAttemptCount || 0), 0)
   };
   const hotels = searchInventoryRows(rows, params, {
     source: 'supplier-api',
@@ -263,7 +269,8 @@ async function readSupplierApiSourceLoads(source, params) {
     sourceCount: loaded.length,
     fanoutRequestCount: cities.length,
     cacheHitCount: loaded.reduce((sum, item) => sum + Number(item.cacheHitCount || 0), 0),
-    cacheMissCount: loaded.reduce((sum, item) => sum + Number(item.cacheMissCount || 0), 0)
+    cacheMissCount: loaded.reduce((sum, item) => sum + Number(item.cacheMissCount || 0), 0),
+    retryAttemptCount: loaded.reduce((sum, item) => sum + Number(item.retryAttemptCount || 0), 0)
   };
 }
 
@@ -287,8 +294,7 @@ async function readSupplierApiSource(source, params) {
     }
   }
 
-  const response = await fetch(url, init);
-  const text = await response.text();
+  const { response, text, retryAttemptCount } = await fetchSupplierApiResponse(source, url, init);
   if (!response.ok) {
     throw new Error(`${redactUrl(url)} 返回 HTTP ${response.status}`);
   }
@@ -304,8 +310,52 @@ async function readSupplierApiSource(source, params) {
     pagination: parsed.pagination,
     cache: cacheKey ? 'miss' : 'disabled',
     cacheHitCount: 0,
-    cacheMissCount: cacheKey ? 1 : 0
+    cacheMissCount: cacheKey ? 1 : 0,
+    retryAttemptCount
   };
+}
+
+async function fetchSupplierApiResponse(source, url, init) {
+  const retryCount = getSupplierApiSourceRetryCount(source);
+  const retryDelayMs = getSupplierApiSourceRetryDelayMs(source);
+  const retryStatusCodes = source.retryStatusCodes || defaultSupplierApiRetryStatusCodes;
+  let retryAttemptCount = 0;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      const text = await response.text();
+      if (response.ok || attempt >= retryCount || !retryStatusCodes.includes(response.status)) {
+        return { response, text, retryAttemptCount };
+      }
+      retryAttemptCount += 1;
+      await sleep(getRetryDelayMs(response, retryDelayMs));
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retryCount) break;
+      retryAttemptCount += 1;
+      await sleep(retryDelayMs);
+    }
+  }
+
+  throw lastError || new Error(`${redactUrl(url)} 实时供应商请求失败。`);
+}
+
+function getRetryDelayMs(response, fallbackMs) {
+  const retryAfter = response.headers.get('retry-after');
+  if (!retryAfter) return fallbackMs;
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const retryAt = Date.parse(retryAfter);
+  if (Number.isFinite(retryAt)) return Math.max(0, retryAt - Date.now());
+  return fallbackMs;
+}
+
+function sleep(ms) {
+  const delay = Math.max(0, Number(ms) || 0);
+  if (delay === 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 function getSupplierFanoutCities(source, params) {
@@ -845,6 +895,9 @@ function getSupplierApiSources() {
   const method = getSupplierApiMethod();
   const headers = getSupplierApiHeaders();
   const timeoutMs = getSupplierApiTimeoutMs();
+  const retryCount = getSupplierApiRetryCount();
+  const retryDelayMs = getSupplierApiRetryDelayMs();
+  const retryStatusCodes = getSupplierApiRetryStatusCodes();
 
   const envSources = urls.map((url, index) => ({
     url,
@@ -852,7 +905,10 @@ function getSupplierApiSources() {
     method,
     headers,
     timeoutMs,
-    cacheSeconds: getSupplierApiCacheSeconds()
+    cacheSeconds: getSupplierApiCacheSeconds(),
+    retryCount,
+    retryDelayMs,
+    retryStatusCodes
   }));
   return [...configuredSources, ...envSources];
 }
@@ -870,6 +926,9 @@ function getSupplierApiConfigSources() {
       headers: normalizeHeaders(item.headers || {}),
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
       cacheSeconds: getNonNegativeInteger(item.cacheSeconds ?? item.cacheTtlSeconds ?? item.responseCacheSeconds, getSupplierApiCacheSeconds()),
+      retryCount: getNonNegativeInteger(item.retryCount ?? item.retries ?? item.retryAttempts, getSupplierApiRetryCount()),
+      retryDelayMs: getNonNegativeInteger(item.retryDelayMs ?? item.retryDelay ?? item.retryBackoffMs, getSupplierApiRetryDelayMs()),
+      retryStatusCodes: normalizeStatusCodes(item.retryStatusCodes || item.retryStatuses, getSupplierApiRetryStatusCodes()),
       auth: normalizeSupplierAuth(item.auth),
       cityFanout: parseBoolean(item.cityFanout ?? item.fanoutCities ?? item.destinationFanout, false),
       cityFanoutLimit: getPositiveInteger(item.cityFanoutLimit ?? item.fanoutLimit, 0),
@@ -1318,6 +1377,26 @@ function getSupplierApiCacheMaxEntries() {
   return getPositiveInteger(process.env.HOTEL_SUPPLIER_API_CACHE_MAX_ENTRIES, defaultSupplierApiCacheMaxEntries);
 }
 
+function getSupplierApiSourceRetryCount(source = {}) {
+  return getNonNegativeInteger(source.retryCount, getSupplierApiRetryCount());
+}
+
+function getSupplierApiRetryCount() {
+  return getNonNegativeInteger(process.env.HOTEL_SUPPLIER_API_RETRY_COUNT, defaultSupplierApiRetryCount);
+}
+
+function getSupplierApiSourceRetryDelayMs(source = {}) {
+  return getNonNegativeInteger(source.retryDelayMs, getSupplierApiRetryDelayMs());
+}
+
+function getSupplierApiRetryDelayMs() {
+  return getNonNegativeInteger(process.env.HOTEL_SUPPLIER_API_RETRY_DELAY_MS, defaultSupplierApiRetryDelayMs);
+}
+
+function getSupplierApiRetryStatusCodes() {
+  return normalizeStatusCodes(process.env.HOTEL_SUPPLIER_API_RETRY_STATUS_CODES, defaultSupplierApiRetryStatusCodes);
+}
+
 function cloneSupplierApiParsedResponse(parsed) {
   return JSON.parse(JSON.stringify({
     rows: parsed?.rows || [],
@@ -1343,6 +1422,17 @@ function normalizeHeaders(value) {
     throw new Error('HOTEL_SUPPLIER_API_HEADERS 必须是 JSON 对象。');
   }
   return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
+}
+
+function normalizeStatusCodes(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const values = Array.isArray(value)
+    ? value
+    : String(value).split(/[,;\s]+/);
+  const codes = values
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item >= 100 && item <= 599);
+  return codes.length ? [...new Set(codes)] : fallback;
 }
 
 function getSupplierApiTimeoutMs() {

@@ -188,6 +188,24 @@ export HOTEL_SUPPLIER_API_CACHE_MAX_ENTRIES=1000
 }
 ```
 
+供应商偶发 429/5xx 或网络错误时，可开启短重试。默认 `0` 次关闭；会优先遵守供应商返回的 `Retry-After`：
+
+```bash
+export HOTEL_SUPPLIER_API_RETRY_COUNT=2
+export HOTEL_SUPPLIER_API_RETRY_DELAY_MS=300
+export HOTEL_SUPPLIER_API_RETRY_STATUS_CODES=408,429,500,502,503,504
+```
+
+```json
+{
+  "name": "ctrip",
+  "url": "https://example.com/ctrip-live",
+  "retryCount": 2,
+  "retryDelayMs": 300,
+  "retryStatusCodes": [429, 500, 502, 503, 504]
+}
+```
+
 供应商如果需要先换 access token，可以在单个源里配置 `auth`。`clientIdEnv` / `clientSecretEnv` 会从服务器环境变量读取密钥，token 会按 `expires_in` 缓存，并自动注入 `Authorization: Bearer ...`：
 
 ```json
