@@ -98,7 +98,7 @@ npm start
 
 当前实时适配器使用 Amadeus Hotel List 和 Hotel Search 接口。国内酒店“全国全量、实时、可预订”需要携程、同程、美团、飞猪、Booking.com、Amadeus 等供应商的正式接口、分销合作或渠道管理系统数据，仅靠前端页面无法保证全量实时价格。
 
-也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL，但远程服务需要允许跨域访问。
+也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL，并会在浏览器里保存远程源、下次打开自动重载；远程服务需要允许跨域访问。
 
 ## 功能
 

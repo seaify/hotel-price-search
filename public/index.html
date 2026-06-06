@@ -105,6 +105,10 @@
               <label class="remote-source-label" for="remoteInventoryUrlInput">远程价格源 URL</label>
               <input id="remoteInventoryUrlInput" class="remote-source-input" type="url" placeholder="https://example.com/hotel-prices.csv" autocomplete="off" />
               <button id="remoteImportButton" class="secondary-import-action" type="button" disabled>加载远程价格源</button>
+              <div class="remote-source-saved">
+                <p id="remoteSourcesStatus">未保存远程价格源</p>
+                <button id="clearRemoteSourcesButton" class="secondary-import-action compact-action" type="button" hidden>清除保存源</button>
+              </div>
               <button id="coverageDownloadButton" class="secondary-import-action" type="button" disabled>下载覆盖缺口</button>
               <p id="importStatus">未选择文件</p>
             </div>

@@ -441,6 +441,19 @@ select:focus {
   font-size: 13px;
 }
 
+.remote-source-saved {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.remote-source-saved p {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .import-panel button {
   min-height: 38px;
   border: 1px solid rgba(11, 122, 117, 0.34);
@@ -448,6 +461,12 @@ select:focus {
   color: white;
   background: var(--teal);
   font-weight: 800;
+}
+
+.import-panel .compact-action {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .import-panel .secondary-import-action {
