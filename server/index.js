@@ -445,13 +445,15 @@ function sendJson(response, payload, status = 200) {
 
 function sendCoverageCsv(response, coverage) {
   const rows = [
-    ['province', 'city', 'covered', 'hotelCount', 'rowCount'],
+    ['province', 'city', 'covered', 'hotelCount', 'rowCount', 'sourceCount', 'sources'],
     ...(coverage.cityCoverage || []).map((item) => [
       item.province,
       item.city,
       item.covered ? 'yes' : 'no',
       item.hotelCount || 0,
-      item.rowCount || 0
+      item.rowCount || 0,
+      item.sourceCount || 0,
+      (item.sources || []).join(';')
     ])
   ];
   const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');

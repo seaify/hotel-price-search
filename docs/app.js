@@ -545,12 +545,15 @@ function summarizeStaticInventoryCoverage() {
   const provinceSet = new Set(cities.map((city) => city.province));
   const rowCountByCity = countStaticBy(normalized.map((hotel) => hotel.city));
   const hotelCountByCity = countStaticBy(mergedHotels.map((hotel) => hotel.city));
+  const sourcesByCity = groupStaticSourcesByCity(normalized);
   const cityCoverage = cities.map(({ province, city }) => ({
     province,
     city,
     covered: coveredCitySet.has(city),
     rowCount: rowCountByCity.get(city) || 0,
-    hotelCount: hotelCountByCity.get(city) || 0
+    hotelCount: hotelCountByCity.get(city) || 0,
+    sourceCount: sourcesByCity.get(city)?.length || 0,
+    sources: sourcesByCity.get(city) || []
   }));
 
   return {
@@ -564,8 +567,47 @@ function summarizeStaticInventoryCoverage() {
     cityCoverage,
     missingCities: cityCoverage
       .filter((item) => !item.covered)
-      .map(({ province, city }) => ({ province, city }))
+      .map(({ province, city }) => ({ province, city })),
+    sourceCoverage: buildStaticSourceCoverage(normalized)
   };
+}
+
+function groupStaticSourcesByCity(hotels) {
+  const citySources = new Map();
+  hotels.forEach((hotel) => {
+    if (!hotel.city) return;
+    const sources = citySources.get(hotel.city) || [];
+    citySources.set(hotel.city, [...new Set([...sources, hotel.providerName || '浏览器导入'].filter(Boolean))]);
+  });
+  return citySources;
+}
+
+function buildStaticSourceCoverage(hotels) {
+  const cities = getStaticCities();
+  const totalProvinces = new Set(cities.map((city) => city.province)).size;
+  const bySource = new Map();
+  hotels.forEach((hotel) => {
+    const sourceName = hotel.providerName || '浏览器导入';
+    bySource.set(sourceName, [...(bySource.get(sourceName) || []), hotel]);
+  });
+
+  return [...bySource.entries()].map(([sourceName, sourceHotels]) => {
+    const citySet = new Set(sourceHotels.map((hotel) => hotel.city).filter(Boolean));
+    const coveredCities = cities.filter((city) => citySet.has(city.city));
+    return {
+      sourceName,
+      rowCount: sourceHotels.length,
+      hotelCount: mergeStaticRates(sourceHotels).length,
+      coveredCities: coveredCities.length,
+      totalCities: cities.length,
+      coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
+      coveredProvinces: new Set(coveredCities.map((city) => city.province)).size,
+      totalProvinces,
+      missingCities: cities
+        .filter((city) => !citySet.has(city.city))
+        .map(({ province, city }) => ({ province, city }))
+    };
+  }).sort((a, b) => b.coveredCities - a.coveredCities || b.hotelCount - a.hotelCount || a.sourceName.localeCompare(b.sourceName, 'zh-CN'));
 }
 
 function countStaticBy(values) {
@@ -1150,13 +1192,15 @@ function formatFileSize(bytes) {
 
 function buildCoverageCsv(coverage) {
   const rows = [
-    ['province', 'city', 'covered', 'hotelCount', 'rowCount'],
+    ['province', 'city', 'covered', 'hotelCount', 'rowCount', 'sourceCount', 'sources'],
     ...(coverage.cityCoverage || []).map((item) => [
       item.province,
       item.city,
       item.covered ? 'yes' : 'no',
       item.hotelCount || 0,
-      item.rowCount || 0
+      item.rowCount || 0,
+      item.sourceCount || 0,
+      (item.sources || []).join(';')
     ])
   ];
   return rows.map((row) => row.map(escapeCsv).join(',')).join('\n');

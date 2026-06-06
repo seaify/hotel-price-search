@@ -287,12 +287,15 @@ function buildInventoryCoverage(rows) {
   const totalProvinces = new Set(cityCatalog.map((city) => city.province)).size;
   const rowCountByCity = countBy(normalized.map((hotel) => hotel.city));
   const hotelCountByCity = countBy(mergedHotels.map((hotel) => hotel.city));
+  const sourcesByCity = groupSourcesByCity(normalized);
   const cityCoverage = cityCatalog.map(({ province, city }) => ({
     province,
     city,
     covered: coveredCitySet.has(city),
     rowCount: rowCountByCity.get(city) || 0,
-    hotelCount: hotelCountByCity.get(city) || 0
+    hotelCount: hotelCountByCity.get(city) || 0,
+    sourceCount: sourcesByCity.get(city)?.length || 0,
+    sources: sourcesByCity.get(city) || []
   }));
   const missingCities = cityCatalog
     .filter((city) => !coveredCitySet.has(city.city))
@@ -319,8 +322,47 @@ function buildInventoryCoverage(rows) {
     totalProvinces,
     cityCoverage,
     missingCities,
+    sourceCoverage: buildSourceCoverage(normalized),
     provinceCoverage
   };
+}
+
+function groupSourcesByCity(hotels) {
+  const citySources = new Map();
+  hotels.forEach((hotel) => {
+    if (!hotel.city) return;
+    const sources = citySources.get(hotel.city) || [];
+    citySources.set(hotel.city, unique([...sources, hotel.providerName || hotel.sourceFile || '未知供应商']));
+  });
+  return citySources;
+}
+
+function buildSourceCoverage(hotels) {
+  const totalProvinces = new Set(cityCatalog.map((city) => city.province)).size;
+  const bySource = new Map();
+  hotels.forEach((hotel) => {
+    const sourceName = hotel.providerName || hotel.sourceFile || '未知供应商';
+    bySource.set(sourceName, [...(bySource.get(sourceName) || []), hotel]);
+  });
+
+  return [...bySource.entries()].map(([sourceName, sourceHotels]) => {
+    const citySet = new Set(sourceHotels.map((hotel) => hotel.city).filter(Boolean));
+    const coveredCities = cityCatalog.filter((city) => citySet.has(city.city));
+    const provinceSet = new Set(coveredCities.map((city) => city.province));
+    return {
+      sourceName,
+      rowCount: sourceHotels.length,
+      hotelCount: mergeHotelRates(sourceHotels).length,
+      coveredCities: coveredCities.length,
+      totalCities: cityCatalog.length,
+      coverageRatio: cityCatalog.length ? Number((coveredCities.length / cityCatalog.length).toFixed(4)) : 0,
+      coveredProvinces: provinceSet.size,
+      totalProvinces,
+      missingCities: cityCatalog
+        .filter((city) => !citySet.has(city.city))
+        .map(({ province, city }) => ({ province, city }))
+    };
+  }).sort((a, b) => b.coveredCities - a.coveredCities || b.hotelCount - a.hotelCount || a.sourceName.localeCompare(b.sourceName, 'zh-CN'));
 }
 
 function countBy(values) {

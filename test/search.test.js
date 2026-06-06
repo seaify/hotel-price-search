@@ -421,6 +421,7 @@ describe('hotel search data', () => {
         province: '北京',
         city: '北京',
         price: 900,
+        source: '覆盖供应商A',
         checkIn: '2026-06-01',
         checkOut: '2026-12-31',
         available: true
@@ -431,6 +432,7 @@ describe('hotel search data', () => {
         province: '上海',
         city: '上海',
         price: 990,
+        source: '覆盖供应商A',
         checkIn: '2026-06-01',
         checkOut: '2026-12-31',
         available: true
@@ -441,6 +443,7 @@ describe('hotel search data', () => {
         province: '广东',
         city: '深圳',
         price: 880,
+        source: '覆盖供应商B',
         checkIn: '2026-06-01',
         checkOut: '2026-12-31',
         available: true
@@ -467,17 +470,22 @@ describe('hotel search data', () => {
       assert.equal(coverage.totalCities, cityCatalog.length);
       assert.equal(coverage.coveredProvinces, 3);
       assert.ok(coverage.cityCoverage.some((item) => item.province === '北京' && item.city === '北京' && item.covered && item.hotelCount === 1));
+      assert.ok(coverage.cityCoverage.some((item) => item.province === '北京' && item.city === '北京' && item.sourceCount === 1 && item.sources.includes('覆盖供应商A')));
+      assert.ok(coverage.cityCoverage.some((item) => item.province === '广东' && item.city === '深圳' && item.sources.includes('覆盖供应商B')));
       assert.ok(coverage.cityCoverage.some((item) => item.province === '广东' && item.city === '广州' && !item.covered && item.hotelCount === 0));
       assert.ok(coverage.missingCities.some((item) => item.province === '广东' && item.city === '广州'));
+      assert.ok(coverage.sourceCoverage.some((item) => item.sourceName === '覆盖供应商A' && item.coveredCities === 2 && item.hotelCount === 2));
+      assert.ok(coverage.sourceCoverage.some((item) => item.sourceName === '覆盖供应商B' && item.coveredCities === 1 && item.hotelCount === 1));
       assert.ok(coverage.provinceCoverage.some((item) => item.province === '广东' && item.coveredCities === 1 && item.totalCities === 21));
 
       const csvResponse = await fetch(`${baseUrl}/api/coverage?format=csv`);
       const csv = await csvResponse.text();
       assert.equal(csvResponse.status, 200);
       assert.match(csvResponse.headers.get('content-type'), /text\/csv/);
-      assert.match(csv, /province,city,covered,hotelCount,rowCount/);
-      assert.match(csv, /北京,北京,yes,1,1/);
-      assert.match(csv, /广东,广州,no,0,0/);
+      assert.match(csv, /province,city,covered,hotelCount,rowCount,sourceCount,sources/);
+      assert.match(csv, /北京,北京,yes,1,1,1,覆盖供应商A/);
+      assert.match(csv, /广东,深圳,yes,1,1,1,覆盖供应商B/);
+      assert.match(csv, /广东,广州,no,0,0,0,/);
 
       const statusResponse = await fetch(`${baseUrl}/api/status`);
       const status = await statusResponse.json();
