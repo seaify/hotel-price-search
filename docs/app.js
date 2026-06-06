@@ -98,9 +98,7 @@ async function init() {
   bindEvents();
   await loadCities();
   await loadProviderStatus();
-  if (!applyInitialQueryFromUrl()) {
-    elements.cityInput.value = '北京';
-  }
+  applyInitialQueryFromUrl();
   await runSearch();
 }
 
