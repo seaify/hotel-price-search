@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { applyFilters, findCity, getNightCount } from '../hotel-data.js';
+import { applyFilters, cityCatalog, findCity, getNightCount } from '../hotel-data.js';
 
 const defaultImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80';
 const maxImportBytes = 8 * 1024 * 1024;
@@ -182,33 +182,31 @@ export async function searchLocalInventory(params) {
     return { hotels: [], status };
   }
 
-  const readableFiles = status.files.filter((file) => file.readable);
-  const loadedFiles = await Promise.all(readableFiles.map(readInventoryFile));
-  const remoteLoads = await Promise.allSettled(getRemoteInventoryUrls().map(readRemoteInventoryUrl));
-  const loadedRemote = remoteLoads
-    .filter((result) => result.status === 'fulfilled')
-    .map((result) => result.value);
-  const sourceErrors = remoteLoads
-    .filter((result) => result.status === 'rejected')
-    .map((result) => result.reason?.message || '远程供应商文件读取失败。');
-  const loaded = [...loadedFiles, ...loadedRemote];
-  const rows = loaded.flatMap((file) =>
-    file.rows.map((row) => ({
-      ...row,
-      __inventoryFile: file.sourceLabel || file.filePath
-    }))
-  );
+  const inventory = await loadInventorySources(status);
   const nights = getNightCount(params.checkIn, params.checkOut);
-  const normalized = rows
+  const normalized = inventory.rows
     .map((row, index) => normalizeHotel(row, index, nights))
     .filter((hotel) => isAvailableForDates(hotel, params));
   const merged = mergeHotelRates(filterByDestination(normalized, params));
 
   return {
     hotels: applyFilters(merged, params),
-    status: { ...status, sourceErrors },
-    rowCount: rows.length,
-    sourceCount: loaded.length
+    status: { ...inventory.status, coverage: buildInventoryCoverage(inventory.rows) },
+    rowCount: inventory.rows.length,
+    sourceCount: inventory.sourceCount
+  };
+}
+
+export async function getLocalInventoryCoverage(status = null) {
+  const inventoryStatus = status || await getLocalInventoryStatus();
+  if (!inventoryStatus.readable) {
+    return buildInventoryCoverage([]);
+  }
+  const inventory = await loadInventorySources(inventoryStatus);
+  return {
+    ...buildInventoryCoverage(inventory.rows),
+    sourceCount: inventory.sourceCount,
+    sourceErrors: inventory.sourceErrors
   };
 }
 
@@ -231,6 +229,71 @@ function sanitizeImportFilename(filename) {
 
 function getImportDir() {
   return resolve(process.env.HOTEL_IMPORT_DIR || 'data/imports');
+}
+
+async function loadInventorySources(status) {
+  const readableFiles = status.files.filter((file) => file.readable);
+  const loadedFiles = await Promise.all(readableFiles.map(readInventoryFile));
+  const remoteLoads = await Promise.allSettled(getRemoteInventoryUrls().map(readRemoteInventoryUrl));
+  const loadedRemote = remoteLoads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = remoteLoads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '远程供应商文件读取失败。');
+  const loaded = [...loadedFiles, ...loadedRemote];
+  const rows = loaded.flatMap((file) =>
+    file.rows.map((row) => ({
+      ...row,
+      __inventoryFile: file.sourceLabel || file.filePath
+    }))
+  );
+
+  return {
+    loaded,
+    rows,
+    sourceCount: loaded.length,
+    sourceErrors,
+    status: { ...status, sourceErrors }
+  };
+}
+
+function buildInventoryCoverage(rows) {
+  const normalized = rows
+    .map((row, index) => normalizeHotel(row, index, 1))
+    .filter((hotel) => hotel.available && hotel.city);
+  const citySet = new Set(normalized.map((hotel) => hotel.city));
+  const provinceSet = new Set(normalized.map((hotel) => hotel.province).filter(Boolean));
+  const coveredCityItems = cityCatalog.filter((city) => citySet.has(city.city));
+  const coveredCitySet = new Set(coveredCityItems.map((city) => city.city));
+  const coveredProvinceSet = new Set(coveredCityItems.map((city) => city.province));
+  const totalProvinces = new Set(cityCatalog.map((city) => city.province)).size;
+  const missingCities = cityCatalog
+    .filter((city) => !coveredCitySet.has(city.city))
+    .map(({ province, city }) => ({ province, city }));
+  const provinceCoverage = [...new Set(cityCatalog.map((city) => city.province))].map((province) => {
+    const provinceCities = cityCatalog.filter((city) => city.province === province);
+    const covered = provinceCities.filter((city) => coveredCitySet.has(city.city));
+    return {
+      province,
+      coveredCities: covered.length,
+      totalCities: provinceCities.length,
+      coverageRatio: provinceCities.length ? Number((covered.length / provinceCities.length).toFixed(4)) : 0,
+      missingCities: provinceCities.filter((city) => !coveredCitySet.has(city.city)).map((city) => city.city)
+    };
+  });
+
+  return {
+    rowCount: rows.length,
+    hotelCount: mergeHotelRates(normalized).length,
+    coveredCities: coveredCitySet.size,
+    totalCities: cityCatalog.length,
+    coverageRatio: cityCatalog.length ? Number((coveredCitySet.size / cityCatalog.length).toFixed(4)) : 0,
+    coveredProvinces: coveredProvinceSet.size || provinceSet.size,
+    totalProvinces,
+    missingCities,
+    provinceCoverage
+  };
 }
 
 function flattenInventoryDocument(parsed) {

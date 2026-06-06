@@ -12,6 +12,7 @@ import {
   summarizeCities
 } from './hotel-data.js';
 import {
+  getLocalInventoryCoverage,
   getLocalInventoryStatus,
   listImportedInventoryFiles,
   saveImportedInventoryFile,
@@ -47,6 +48,10 @@ export function createHotelServer() {
 
       if (url.pathname === '/api/status') {
         return sendJson(response, await getProviderStatus());
+      }
+
+      if (url.pathname === '/api/coverage') {
+        return sendJson(response, await getLocalInventoryCoverage());
       }
 
       if (url.pathname === '/api/imports') {
@@ -100,7 +105,7 @@ export async function searchHotels(params) {
 
     if (localResults.sourceCount > 0) {
       const page = paginateHotels(localResults.hotels, normalized);
-      const providers = await getProviderStatus();
+      const providers = await getProviderStatus({ includeCoverage: false });
       providers.localInventory = localResults.status;
       return {
         source: 'local',
@@ -174,10 +179,14 @@ export async function searchHotels(params) {
   };
 }
 
-async function getProviderStatus() {
+async function getProviderStatus({ includeCoverage = true } = {}) {
   const localInventory = await getLocalInventoryStatus();
+  const coverage = includeCoverage && localInventory.readable ? await getLocalInventoryCoverage(localInventory) : null;
   return {
-    localInventory,
+    localInventory: {
+      ...localInventory,
+      coverage
+    },
     amadeus: {
       configured: Boolean(process.env.AMADEUS_CLIENT_ID && process.env.AMADEUS_CLIENT_SECRET),
       baseUrl: process.env.AMADEUS_BASE_URL || 'https://test.api.amadeus.com'

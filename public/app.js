@@ -451,8 +451,10 @@ function renderProviderStatus(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
   const remoteCount = Number(providers?.localInventory?.remoteCount || 0);
   const apiReady = Boolean(providers?.amadeus?.configured);
+  const coverage = providers?.localInventory?.coverage;
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
+    ['真实覆盖城市', coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
     ['远程供应商文件', remoteCount ? `${remoteCount} 源` : '未接入', remoteCount ? 'on' : ''],
     ['实时 API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
     ['示例价格库', `${providers?.demo?.cities || state.cities.length} 城`, 'demo']
@@ -499,6 +501,26 @@ function summarizeStaticCities() {
   };
 }
 
+function summarizeStaticInventoryCoverage() {
+  const normalized = state.staticInventoryRows
+    .map((row, index) => normalizeStaticHotel(row, index, 1))
+    .filter((hotel) => hotel.available && hotel.city);
+  const coveredCitySet = new Set(normalized.map((hotel) => hotel.city));
+  const cities = getStaticCities();
+  const coveredCities = cities.filter((city) => coveredCitySet.has(city.city));
+  const provinceSet = new Set(cities.map((city) => city.province));
+
+  return {
+    rowCount: state.staticInventoryRows.length,
+    hotelCount: mergeStaticRates(normalized).length,
+    coveredCities: coveredCities.length,
+    totalCities: cities.length,
+    coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
+    coveredProvinces: new Set(coveredCities.map((city) => city.province)).size,
+    totalProvinces: provinceSet.size
+  };
+}
+
 function getStaticProviderStatus() {
   const localReady = state.staticInventoryRows.length > 0;
   return {
@@ -507,7 +529,8 @@ function getStaticProviderStatus() {
       readable: localReady,
       readableCount: state.staticImportNames.length,
       importedCount: state.staticImportNames.length,
-      importedFiles: state.staticImportNames.map((filename) => ({ filename }))
+      importedFiles: state.staticImportNames.map((filename) => ({ filename })),
+      coverage: localReady ? summarizeStaticInventoryCoverage() : null
     },
     amadeus: { configured: false },
     demo: { enabled: true, cities: getStaticCities().length }

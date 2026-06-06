@@ -296,6 +296,94 @@ describe('hotel search data', () => {
     }
   });
 
+  it('reports real inventory city coverage through the HTTP API', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-coverage-'));
+    const filePath = join(dir, 'coverage.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(filePath, JSON.stringify([
+      {
+        id: 'coverage-bj-001',
+        name: '北京覆盖统计酒店',
+        province: '北京',
+        city: '北京',
+        price: 900,
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'coverage-sh-001',
+        name: '上海覆盖统计酒店',
+        province: '上海',
+        city: '上海',
+        price: 990,
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'coverage-sz-001',
+        name: '深圳覆盖统计酒店',
+        province: '广东',
+        city: '深圳',
+        price: 880,
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      }
+    ]));
+
+    process.env.HOTEL_DATA_FILE = filePath;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    clearInventoryCache();
+
+    const server = createHotelServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const coverageResponse = await fetch(`${baseUrl}/api/coverage`);
+      const coverage = await coverageResponse.json();
+      assert.equal(coverageResponse.status, 200);
+      assert.equal(coverage.rowCount, 3);
+      assert.equal(coverage.hotelCount, 3);
+      assert.equal(coverage.coveredCities, 3);
+      assert.equal(coverage.totalCities, cityCatalog.length);
+      assert.equal(coverage.coveredProvinces, 3);
+      assert.ok(coverage.missingCities.some((item) => item.province === '广东' && item.city === '广州'));
+      assert.ok(coverage.provinceCoverage.some((item) => item.province === '广东' && item.coveredCities === 1 && item.totalCities === 21));
+
+      const statusResponse = await fetch(`${baseUrl}/api/status`);
+      const status = await statusResponse.json();
+      assert.equal(status.localInventory.coverage.coveredCities, 3);
+      assert.equal(status.localInventory.coverage.totalCities, cityCatalog.length);
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      clearInventoryCache();
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refreshes cached local inventory when the supplier file changes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-refresh-'));
     const filePath = join(dir, 'prices.json');
