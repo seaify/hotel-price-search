@@ -856,6 +856,90 @@ describe('hotel search data', () => {
     }
   });
 
+  it('merges supplier hotels by master hotel id across different channel ids', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-master-id-'));
+    const ctripPath = join(dir, 'ctrip-master.json');
+    const meituanPath = join(dir, 'meituan-master.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(ctripPath, JSON.stringify([
+      {
+        id: 'ctrip-sh-991',
+        masterHotelId: 'CN-SH-HOTEL-0001',
+        name: '上海统一ID江景酒店',
+        province: '上海',
+        city: '上海',
+        district: '浦东',
+        address: '上海市浦东新区滨江大道 1 号',
+        star: 5,
+        rating: 4.8,
+        price: 1280,
+        source: '携程供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      }
+    ]));
+    await writeFile(meituanPath, JSON.stringify([
+      {
+        id: 'meituan-8842',
+        standardHotelId: 'CN-SH-HOTEL-0001',
+        name: '上海陆家嘴江景大酒店',
+        province: '上海市',
+        city: '上海市',
+        district: '陆家嘴',
+        address: '上海浦东滨江大道一号',
+        star: 5,
+        rating: 4.7,
+        price: 1080,
+        source: '美团供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      }
+    ]));
+
+    delete process.env.HOTEL_DATA_FILE;
+    process.env.HOTEL_DATA_FILES = `${ctripPath},${meituanPath}`;
+    delete process.env.HOTEL_IMPORT_DIR;
+
+    try {
+      const result = await searchHotels({
+        city: '上海',
+        keyword: '江景',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].masterHotelId, 'cn-sh-hotel-0001');
+      assert.equal(result.hotels[0].price, 1080);
+      assert.equal(result.hotels[0].offerCount, 2);
+      assert.deepEqual(result.hotels[0].providerNames.sort(), ['携程供应商', '美团供应商'].sort());
+      assert.deepEqual(result.hotels[0].rates.map((rate) => rate.price), [1080, 1280]);
+    } finally {
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('loads JSON Lines supplier exports from local files', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-jsonl-'));
     const filePath = join(dir, 'prices.ndjson');

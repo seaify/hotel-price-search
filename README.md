@@ -25,7 +25,7 @@ export HOTEL_DATA_FILES=/absolute/path/ctrip.csv,/absolute/path/meituan.jsonl,/a
 npm start
 ```
 
-多个文件里同一家酒店会合并成一张酒店卡，页面显示最低价和报价源数量。
+多个文件里同一家酒店会合并成一张酒店卡，页面显示最低价和报价源数量。如果不同供应商使用不同渠道酒店 ID，可提供 `masterHotelId` / `standardHotelId` / `统一酒店ID`，系统会优先按这个统一 ID 合并报价。
 
 也可以接远程供应商导出 URL，适合把携程、美团、飞猪、同程、渠道管理系统或自有合同库存定时导出到对象存储、内网接口、签名 URL：
 
@@ -261,7 +261,7 @@ curl -OJ 'http://localhost:5174/api/supplier-coverage.csv?checkIn=2026-06-06&che
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。JSONL 可参考 [hotel-prices.jsonl.sample](data/hotel-prices.jsonl.sample)。嵌套 JSON 可参考 [hotel-prices.nested.sample.json](data/hotel-prices.nested.sample.json)，支持 `hotels/items/data/results/records/list` 作为酒店集合，也支持酒店下的 `rooms/roomTypes/roomList` 和房型下的 `rates/offers/prices` 多报价结构。核心字段是：
 
 ```text
-id,name,province,city,district,address,star,rating,reviews,price,currency,amenities,tags,payment,cancellation,source,checkIn,checkOut,available,bookingUrl
+id,masterHotelId,name,province,city,district,address,star,rating,reviews,price,currency,amenities,tags,payment,cancellation,source,checkIn,checkOut,available,bookingUrl
 ```
 
 省市字段会自动规范化，供应商文件里的 `广东省`、`深圳市`、`广西壮族自治区`、`广东省深圳市` 等写法会统一归并到内部的省份/城市名称，便于省级查询和覆盖率统计。

@@ -27,6 +27,7 @@ const nestedRateKeys = ['rates', 'offers', 'prices', 'roomRates', 'plans', 'prod
 const nestedCollectionKeys = new Set([...inventoryCollectionKeys, ...nestedRoomKeys, ...nestedRateKeys]);
 const fieldAliases = {
   id: ['id', 'hotelId', 'hotel_id', '酒店ID', '酒店编号', '供应商酒店ID'],
+  masterHotelId: ['masterHotelId', 'master_hotel_id', 'standardHotelId', 'standard_hotel_id', 'canonicalHotelId', 'canonical_hotel_id', 'unifiedHotelId', 'unified_hotel_id', 'globalHotelId', 'global_hotel_id', '统一酒店ID', '标准酒店ID', '主酒店ID'],
   name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '酒店', '名称'],
   province: ['province', '省份', '省', '地区省份'],
   city: ['city', 'destination', '目的地', '城市', '市'],
@@ -1074,9 +1075,11 @@ function normalizeHotel(row, index, nights, options = {}) {
   const providerName = pick(row, 'providerName') || options.sourceLabel || basename(row.__inventoryFile || '本地供应商文件');
   const roomName = pick(row, 'roomName') || '供应商库存';
   const source = options.source || 'local';
+  const masterHotelId = normalizeHotelIdentifier(pick(row, 'masterHotelId'));
 
   return {
     id: pick(row, 'id') || `local-${index}`,
+    masterHotelId,
     name: pick(row, 'name') || '未命名酒店',
     city: location.city,
     province: location.province,
@@ -1112,7 +1115,8 @@ function normalizeHotel(row, index, nights, options = {}) {
       currency: pick(row, 'currency') || 'CNY',
       payment: pick(row, 'payment') || '预订前确认',
       cancellation: pick(row, 'cancellation') || '预订前确认',
-      bookingUrl: pick(row, 'bookingUrl') || ''
+      bookingUrl: pick(row, 'bookingUrl') || '',
+      masterHotelId
     }]
   };
 }
@@ -1179,6 +1183,10 @@ function normalizeDate(value) {
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
 }
 
+function normalizeHotelIdentifier(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
 function mergeHotelRates(hotels, source = 'local') {
   const merged = new Map();
 
@@ -1231,6 +1239,8 @@ function mergeHotelRates(hotels, source = 'local') {
 }
 
 function getHotelKey(hotel) {
+  if (hotel.masterHotelId) return `master:${hotel.masterHotelId}`;
+
   const locationKey = [
     hotel.province,
     hotel.city,

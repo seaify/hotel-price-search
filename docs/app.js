@@ -50,6 +50,7 @@ const staticNestedCollectionKeys = new Set([...staticInventoryCollectionKeys, ..
 
 const staticFieldAliases = {
   id: ['id', 'hotelId', 'hotel_id', '酒店ID', '酒店编号', '供应商酒店ID'],
+  masterHotelId: ['masterHotelId', 'master_hotel_id', 'standardHotelId', 'standard_hotel_id', 'canonicalHotelId', 'canonical_hotel_id', 'unifiedHotelId', 'unified_hotel_id', 'globalHotelId', 'global_hotel_id', '统一酒店ID', '标准酒店ID', '主酒店ID'],
   name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '酒店', '名称'],
   province: ['province', '省份', '省'],
   city: ['city', 'destination', '目的地', '城市', '市'],
@@ -1381,8 +1382,10 @@ function normalizeStaticHotel(row, index, nights) {
   const location = normalizeStaticInventoryLocation(pickStatic(row, 'city'), pickStatic(row, 'province'));
   const providerName = pickStatic(row, 'providerName') || row.__inventoryFile || '浏览器导入';
   const roomName = pickStatic(row, 'roomName') || '供应商库存';
+  const masterHotelId = normalizeStaticHotelIdentifier(pickStatic(row, 'masterHotelId'));
   return {
     id: pickStatic(row, 'id') || `static-${index}`,
+    masterHotelId,
     name: pickStatic(row, 'name') || '未命名酒店',
     city: location.city,
     province: location.province,
@@ -1415,7 +1418,8 @@ function normalizeStaticHotel(row, index, nights) {
       currency: 'CNY',
       payment: '预订前确认',
       cancellation: '预订前确认',
-      bookingUrl: pickStatic(row, 'bookingUrl') || ''
+      bookingUrl: pickStatic(row, 'bookingUrl') || '',
+      masterHotelId
     }]
   };
 }
@@ -1443,7 +1447,7 @@ function applyStaticFilters(hotels, params) {
 function mergeStaticRates(hotels) {
   const merged = new Map();
   hotels.forEach((hotel) => {
-    const key = `${hotel.province}|${hotel.city}|${hotel.name}|${hotel.address || hotel.district}`.toLowerCase().replace(/\s+/g, '');
+    const key = getStaticHotelKey(hotel);
     if (!merged.has(key)) {
       merged.set(key, { ...hotel, rates: [...hotel.rates], providerNames: [hotel.providerName], offerCount: 1 });
       return;
@@ -1466,6 +1470,15 @@ function mergeStaticRates(hotels) {
     rates: hotel.rates.filter((rate) => rate.price > 0).sort((a, b) => a.price - b.price),
     tags: [...new Set([...(hotel.tags || []), hotel.rates.length > 1 ? `${hotel.rates.length} 个报价` : '真实库存'])]
   }));
+}
+
+function getStaticHotelKey(hotel) {
+  if (hotel.masterHotelId) return `master:${hotel.masterHotelId}`;
+  return `${hotel.province}|${hotel.city}|${hotel.name}|${hotel.address || hotel.district}`.toLowerCase().replace(/\s+/g, '');
+}
+
+function normalizeStaticHotelIdentifier(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
 }
 
 function paginateStaticHotels(hotels, params) {
