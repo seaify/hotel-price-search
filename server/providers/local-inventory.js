@@ -79,6 +79,17 @@ export function getRemoteInventoryUrls() {
     .filter(Boolean);
 }
 
+export function getRemoteInventoryManifestUrls() {
+  return [
+    process.env.HOTEL_DATA_MANIFEST_URLS,
+    process.env.HOTEL_DATA_MANIFEST_URL
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(/[\n,;]/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 export function clearInventoryCache() {
   inventoryCache.clear();
 }
@@ -86,6 +97,7 @@ export function clearInventoryCache() {
 export async function getLocalInventoryStatus() {
   const importedFiles = await listImportedInventoryFiles();
   const remoteUrls = getRemoteInventoryUrls();
+  const remoteManifestUrls = getRemoteInventoryManifestUrls();
   const filePaths = unique([...getLocalInventoryPaths(), ...importedFiles.map((file) => file.filePath)]);
   const files = await Promise.all(filePaths.map(async (filePath) => {
     try {
@@ -104,17 +116,19 @@ export async function getLocalInventoryStatus() {
   const readableFiles = files.filter((file) => file.readable);
 
   return {
-    configured: Boolean(process.env.HOTEL_DATA_FILE || process.env.HOTEL_DATA_FILES || remoteUrls.length || importedFiles.length),
-    readable: readableFiles.length > 0 || remoteUrls.length > 0,
+    configured: Boolean(process.env.HOTEL_DATA_FILE || process.env.HOTEL_DATA_FILES || remoteUrls.length || remoteManifestUrls.length || importedFiles.length),
+    readable: readableFiles.length > 0 || remoteUrls.length > 0 || remoteManifestUrls.length > 0,
     filePath: filePaths[0],
     filePaths,
     fileCount: filePaths.length,
-    readableCount: readableFiles.length + remoteUrls.length,
-    remoteCount: remoteUrls.length,
+    readableCount: readableFiles.length + remoteUrls.length + remoteManifestUrls.length,
+    remoteCount: remoteUrls.length + remoteManifestUrls.length,
     remoteInventory: {
-      configured: remoteUrls.length > 0,
+      configured: remoteUrls.length > 0 || remoteManifestUrls.length > 0,
       urlCount: remoteUrls.length,
+      manifestUrlCount: remoteManifestUrls.length,
       urls: remoteUrls.map(redactRemoteUrl),
+      manifestUrls: remoteManifestUrls.map(redactRemoteUrl),
       timeoutMs: getRemoteTimeoutMs(),
       maxBytes: getRemoteMaxBytes(),
       cacheSeconds: getInventoryCacheSeconds()
@@ -212,11 +226,13 @@ export async function getLocalInventoryCoverage(status = null, params = {}) {
   };
 }
 
-export function parseInventory(raw, extension = '.json') {
-  if (extension === '.csv') return parseCsv(raw);
-  if (extension === '.jsonl' || extension === '.ndjson') return parseJsonLines(raw);
+export function parseInventory(raw, extension = '.json', options = {}) {
+  const fieldMap = normalizeFieldMap(options.fieldMap || {});
+  const mapRows = (rows) => rows.map((row) => mapInventoryRow(row, fieldMap));
+  if (extension === '.csv') return mapRows(parseCsv(raw));
+  if (extension === '.jsonl' || extension === '.ndjson') return mapRows(parseJsonLines(raw));
   const parsed = JSON.parse(raw);
-  return flattenInventoryDocument(parsed);
+  return mapRows(flattenInventoryDocument(parsed));
 }
 
 export function searchInventoryRows(rows, params, options = {}) {
@@ -250,13 +266,19 @@ function getImportDir() {
 async function loadInventorySources(status) {
   const readableFiles = status.files.filter((file) => file.readable);
   const loadedFiles = await Promise.all(readableFiles.map(readInventoryFile));
-  const remoteLoads = await Promise.allSettled(getRemoteInventoryUrls().map(readRemoteInventoryUrl));
+  const remoteLoads = await Promise.allSettled([
+    ...getRemoteInventoryUrls().map((url) => readRemoteInventoryUrl(url)),
+    ...getRemoteInventoryManifestUrls().map((url) => readRemoteInventoryManifestUrl(url))
+  ]);
   const loadedRemote = remoteLoads
     .filter((result) => result.status === 'fulfilled')
     .map((result) => result.value);
-  const sourceErrors = remoteLoads
-    .filter((result) => result.status === 'rejected')
-    .map((result) => result.reason?.message || '远程供应商文件读取失败。');
+  const sourceErrors = [
+    ...remoteLoads
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason?.message || '远程供应商文件读取失败。'),
+    ...loadedRemote.flatMap((source) => source.sourceErrors || [])
+  ];
   const loaded = [...loadedFiles, ...loadedRemote];
   const rows = loaded.flatMap((file) =>
     file.rows.map((row) => ({
@@ -268,7 +290,7 @@ async function loadInventorySources(status) {
   return {
     loaded,
     rows,
-    sourceCount: loaded.length,
+    sourceCount: loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0),
     sourceErrors,
     status: { ...status, sourceErrors }
   };
@@ -506,8 +528,40 @@ async function readInventoryFile(file) {
   return { ...file, sourceLabel: file.filePath, rows, cache: 'miss' };
 }
 
-async function readRemoteInventoryUrl(url) {
-  const cacheKey = `remote:${url}`;
+async function readRemoteInventoryUrl(url, options = {}) {
+  const fieldMap = normalizeFieldMap(options.fieldMap || {});
+  const cacheKey = `remote:${url}:${options.sourceName || ''}:${JSON.stringify(fieldMap)}`;
+  const cached = inventoryCache.get(cacheKey);
+  const cacheTtlMs = getInventoryCacheSeconds() * 1000;
+  if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    return {
+      filePath: url,
+      sourceLabel: options.sourceName || redactRemoteUrl(url),
+      readable: true,
+      rows: cached.rows,
+      sourceCount: 1,
+      cache: 'hit',
+      cachedAt: new Date(cached.cachedAt).toISOString()
+    };
+  }
+
+  const { text, format } = await fetchRemoteInventoryContent(url);
+  const rows = parseInventory(text, format, { fieldMap }).map((row) => ({
+    ...row,
+    source: row.source || row.provider || row.supplier || options.sourceName || row.source
+  }));
+  return {
+    filePath: url,
+    sourceLabel: options.sourceName || redactRemoteUrl(url),
+    readable: true,
+    rows: cacheRemoteRows(cacheKey, rows),
+    sourceCount: 1,
+    cache: 'miss'
+  };
+}
+
+async function readRemoteInventoryManifestUrl(url) {
+  const cacheKey = `remote-manifest:${url}`;
   const cached = inventoryCache.get(cacheKey);
   const cacheTtlMs = getInventoryCacheSeconds() * 1000;
   if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
@@ -516,11 +570,56 @@ async function readRemoteInventoryUrl(url) {
       sourceLabel: redactRemoteUrl(url),
       readable: true,
       rows: cached.rows,
+      sourceCount: cached.sourceCount,
+      sourceErrors: cached.sourceErrors,
       cache: 'hit',
       cachedAt: new Date(cached.cachedAt).toISOString()
     };
   }
 
+  const { text } = await fetchRemoteInventoryContent(url);
+  const sources = parseRemoteInventoryManifestSources(text, url);
+  if (!sources.length) {
+    throw new Error(`${redactRemoteUrl(url)} 没有识别到远程供应商清单。`);
+  }
+
+  const loads = await Promise.allSettled(sources.map((source) =>
+    readRemoteInventoryUrl(source.url, {
+      sourceName: source.name,
+      fieldMap: source.fieldMap
+    })
+  ));
+  const loaded = loads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = loads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '远程供应商清单子源读取失败。');
+  if (!loaded.length) {
+    throw new Error(`${redactRemoteUrl(url)} 的所有供应商子源读取失败。`);
+  }
+
+  const rows = loaded.flatMap((source) => source.rows);
+  const sourceCount = loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0);
+  inventoryCache.set(cacheKey, {
+    type: 'remote-manifest',
+    rows,
+    sourceCount,
+    sourceErrors,
+    cachedAt: Date.now()
+  });
+  return {
+    filePath: url,
+    sourceLabel: redactRemoteUrl(url),
+    readable: true,
+    rows,
+    sourceCount,
+    sourceErrors,
+    cache: 'miss'
+  };
+}
+
+async function fetchRemoteInventoryContent(url) {
   const response = await fetch(url, {
     headers: getRemoteInventoryHeaders(),
     signal: AbortSignal.timeout(getRemoteTimeoutMs())
@@ -547,11 +646,8 @@ async function readRemoteInventoryUrl(url) {
     throw new Error(`${redactRemoteUrl(url)} 解压后文件超过 ${formatBytes(maxBytes)} 限制。`);
   }
   return {
-    filePath: url,
-    sourceLabel: redactRemoteUrl(url),
-    readable: true,
-    rows: cacheRemoteRows(cacheKey, parseInventory(text, format)),
-    cache: 'miss'
+    text,
+    format
   };
 }
 
@@ -562,6 +658,29 @@ function cacheRemoteRows(cacheKey, rows) {
     cachedAt: Date.now()
   });
   return rows;
+}
+
+function parseRemoteInventoryManifestSources(content, manifestUrl) {
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  const sources = Array.isArray(parsed?.sources)
+    ? parsed.sources
+    : Array.isArray(parsed?.feeds)
+      ? parsed.feeds
+      : Array.isArray(parsed?.inventorySources)
+        ? parsed.inventorySources
+        : [];
+  return sources
+    .filter((source) => source && typeof source === 'object' && (source.url || source.href))
+    .map((source, index) => ({
+      url: new URL(source.url || source.href, manifestUrl).href,
+      name: String(source.name || source.provider || source.supplier || `远程供应商${index + 1}`),
+      fieldMap: normalizeFieldMap(source.fieldMap || source.fields || {})
+    }));
 }
 
 function getRemoteInventoryHeaders() {
@@ -734,6 +853,43 @@ function pick(row, field) {
     }
   }
   return undefined;
+}
+
+function mapInventoryRow(row, fieldMap = {}) {
+  if (!fieldMap || !Object.keys(fieldMap).length) return row;
+  const mapped = { ...row };
+  Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
+    const value = getMappedValue(row, sourcePath);
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      mapped[targetField] = value;
+    }
+  });
+  return mapped;
+}
+
+function getMappedValue(row, sourcePath) {
+  const paths = Array.isArray(sourcePath) ? sourcePath : [sourcePath];
+  for (const path of paths) {
+    const value = getPathValue(row, path);
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function getPathValue(value, path) {
+  if (!path) return undefined;
+  return String(path).split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    return current[key];
+  }, value);
+}
+
+function normalizeFieldMap(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([, sourcePath]) =>
+    typeof sourcePath === 'string' ||
+    (Array.isArray(sourcePath) && sourcePath.every((item) => typeof item === 'string'))
+  ));
 }
 
 function parseMoney(value) {

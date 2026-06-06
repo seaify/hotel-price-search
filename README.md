@@ -43,6 +43,39 @@ npm start
 
 远程 URL 使用和本地 CSV/JSON/JSONL 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。远程文件默认缓存 60 秒，可用 `HOTEL_DATA_CACHE_SECONDS` 调整刷新间隔；本地文件会按修改时间和文件大小自动刷新。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。
 
+如果多家远程供应商字段不同，也可以配置一个远程清单 URL。Node 后端会读取清单里的多个供应商导出源，并按每个源的 `fieldMap` 做字段映射：
+
+```bash
+export HOTEL_DATA_MANIFEST_URL=https://example.com/hotel-suppliers.json
+npm start
+```
+
+清单格式与网页远程导入相同：
+
+```json
+{
+  "sources": [
+    {
+      "name": "ctrip",
+      "url": "https://example.com/ctrip-prices.json",
+      "fieldMap": {
+        "id": "offerId",
+        "name": "hotel.title",
+        "province": "hotel.provinceName",
+        "city": "hotel.cityName",
+        "price": ["rate.sale", "price"],
+        "checkIn": "stay.from",
+        "checkOut": "stay.to"
+      }
+    },
+    {
+      "name": "meituan",
+      "url": "https://example.com/meituan-prices.csv"
+    }
+  ]
+}
+```
+
 如果供应商提供的是实时查价接口，而不是定时导出文件，也可以配置通用实时 API。系统会把目的地、日期、成人、房间、价格等查询参数传给供应商，并把对方返回的 CSV/JSON/JSONL 统一归一化到酒店结果里：
 
 ```bash
@@ -139,7 +172,7 @@ npm start
 - 真实库存覆盖率看板：展示已覆盖城市数、总城市数、真实酒店数、按供应商覆盖和缺口城市
 - 多供应商文件合并，同酒店保留多报价并优先显示最低价
 - 网页上传供应商 CSV/JSON/JSONL，无需重启服务即可查询导入价格
-- GitHub Pages 静态版支持远程供应商清单 manifest、多源自动重载和每源字段映射
+- Node 版和 GitHub Pages 静态版都支持远程供应商清单 manifest、多源自动重载和每源字段映射
 - `/api/status` 查看当前供应商接入状态
 - `/api/coverage` 查看真实库存全国覆盖率，包含逐城市覆盖、按供应商分组覆盖和缺口城市；可传 `checkIn` / `checkOut` 计算指定入住日期的可售覆盖；`/api/coverage?format=csv` 或 `/api/coverage.csv` 可下载逐城市覆盖/缺口清单，CSV 会标出覆盖该城市的供应商来源
 - `/api/imports` 查看或上传供应商文件

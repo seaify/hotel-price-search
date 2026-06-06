@@ -1938,6 +1938,202 @@ describe('hotel search data', () => {
     }
   });
 
+  it('loads a remote supplier manifest with per-source field maps', async () => {
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestUrl = process.env.HOTEL_DATA_MANIFEST_URL;
+    const previousManifestUrls = process.env.HOTEL_DATA_MANIFEST_URLS;
+    const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+    const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_URLS;
+    delete process.env.HOTEL_DATA_URL_HEADERS;
+    process.env.HOTEL_DATA_CACHE_SECONDS = '3600';
+    clearInventoryCache();
+
+    const standardCsv = [
+      'id,name,province,city,district,address,star,rating,price,currency,tags,source,checkIn,checkOut,available,bookingUrl',
+      'manifest-standard-001,北京Manifest远程标准酒店,北京,北京,朝阳,北京市朝阳区清单路 2 号,5,4.7,920,CNY,真实库存,标准远程供应商,2026-06-01,2026-12-31,true,https://example.com/manifest-standard-001'
+    ].join('\n');
+    const mappedJson = JSON.stringify({
+      offers: [
+        {
+          offerId: 'manifest-mapped-001',
+          hotel: {
+            title: '厦门Manifest远程映射酒店',
+            provinceName: '福建省',
+            cityName: '厦门市',
+            areaName: '思明',
+            location: '厦门市思明区清单路 1 号',
+            stars: 5,
+            score: 4.8
+          },
+          rate: {
+            sale: 888,
+            list: 1088,
+            plan: '海景大床房',
+            book: 'https://example.com/manifest-mapped-001'
+          },
+          stay: {
+            from: '2026-06-01',
+            to: '2026-12-31'
+          },
+          stock: 'available'
+        }
+      ]
+    });
+
+    const supplierServer = createHttpServer((request, response) => {
+      if (request.url === '/manifest.json') {
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          sources: [
+            {
+              name: '映射远程供应商',
+              url: '/mapped.json',
+              fieldMap: {
+                id: 'offerId',
+                name: 'hotel.title',
+                province: 'hotel.provinceName',
+                city: 'hotel.cityName',
+                district: 'hotel.areaName',
+                address: 'hotel.location',
+                star: 'hotel.stars',
+                rating: 'hotel.score',
+                price: ['rate.sale', 'price'],
+                originalPrice: 'rate.list',
+                roomName: 'rate.plan',
+                bookingUrl: 'rate.book',
+                checkIn: 'stay.from',
+                checkOut: 'stay.to',
+                available: 'stock'
+              }
+            },
+            {
+              name: '标准远程供应商',
+              url: '/standard.csv'
+            }
+          ]
+        }));
+        return;
+      }
+      if (request.url === '/mapped.json') {
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(mappedJson);
+        return;
+      }
+      if (request.url === '/standard.csv') {
+        response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8' });
+        response.end(standardCsv);
+        return;
+      }
+      response.writeHead(404);
+      response.end('not found');
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_DATA_MANIFEST_URL = `http://127.0.0.1:${address.port}/manifest.json`;
+
+    try {
+      const result = await searchHotels({
+        city: '',
+        keyword: 'Manifest远程',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 2);
+      assert.match(result.notice, /2 个已接入的供应商库存源/);
+      assert.equal(result.providers.localInventory.remoteCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.manifestUrlCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.manifestUrls[0], `http://127.0.0.1:${address.port}/manifest.json`);
+
+      const mapped = result.hotels.find((hotel) => hotel.name === '厦门Manifest远程映射酒店');
+      assert.ok(mapped);
+      assert.equal(mapped.city, '厦门');
+      assert.equal(mapped.province, '福建');
+      assert.equal(mapped.price, 888);
+      assert.equal(mapped.originalPrice, 1088);
+      assert.equal(mapped.style, '海景大床房');
+      assert.equal(mapped.providerName, '映射远程供应商');
+      assert.equal(mapped.bookingUrl, 'https://example.com/manifest-mapped-001');
+
+      const standard = result.hotels.find((hotel) => hotel.name === '北京Manifest远程标准酒店');
+      assert.ok(standard);
+      assert.equal(standard.price, 920);
+      assert.equal(standard.providerName, '标准远程供应商');
+
+      const sourceCoverage = result.providers.localInventory.coverage.sourceCoverage;
+      assert.ok(sourceCoverage.some((item) => item.sourceName === '映射远程供应商' && item.coveredCities === 1));
+      assert.ok(sourceCoverage.some((item) => item.sourceName === '标准远程供应商' && item.coveredCities === 1));
+
+      const cachedResult = await searchHotels({
+        city: '',
+        keyword: 'Manifest远程',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(cachedResult.total, 2);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousManifestUrl === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URL;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URL = previousManifestUrl;
+      }
+      if (previousManifestUrls === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URLS;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URLS = previousManifestUrls;
+      }
+      if (previousDataUrlHeaders === undefined) {
+        delete process.env.HOTEL_DATA_URL_HEADERS;
+      } else {
+        process.env.HOTEL_DATA_URL_HEADERS = previousDataUrlHeaders;
+      }
+      if (previousCacheSeconds === undefined) {
+        delete process.env.HOTEL_DATA_CACHE_SECONDS;
+      } else {
+        process.env.HOTEL_DATA_CACHE_SECONDS = previousCacheSeconds;
+      }
+    }
+  });
+
   it('falls back to demo data when every remote supplier URL fails to load', async () => {
     const previousFile = process.env.HOTEL_DATA_FILE;
     const previousFiles = process.env.HOTEL_DATA_FILES;
