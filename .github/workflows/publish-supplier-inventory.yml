@@ -117,13 +117,11 @@ jobs:
 
       - name: Check supplier inventory configuration
         id: config
-        run: |
-          if [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUT" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_URL" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST" ]; then
-            echo "::notice title=Supplier inventory not configured::Set supplier_inventory_inputs or supplier_source_manifest_url when manually running this workflow, or configure HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON / HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON in repository secrets."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: node scripts/check-supplier-inventory-config.js --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Report missing supplier inventory
+        if: steps.config.outputs.configured != 'true'
+        run: echo "::notice title=Supplier inventory not configured::Set supplier_inventory_inputs or supplier_source_manifest_url when manually running this workflow, or configure HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON / HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON in repository secrets."
 
       - name: Run tests
         if: steps.config.outputs.configured == 'true'

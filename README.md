@@ -398,6 +398,12 @@ npm run build:pages
 
 workflow 会先运行测试，再执行 `npm run publish:supplier-inventory:env`。验收通过才会写入 `public/inventory/`、刷新 manifest、构建 `docs/` 并自动提交；如果供应商 URL 未配置，定时任务只会提示未配置，不会生成失败发布。
 
+本地或 Actions 里可以先跑一次非敏感配置自检，确认是否已经配置了供应商输入、字段映射、鉴权头和发布门槛；命令只显示来源和数量，不会打印 URL、token 或 secret 内容：
+
+```bash
+npm run check:supplier-inventory-config
+```
+
 如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：
 
 ```bash

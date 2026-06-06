@@ -1,6 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPublishSupplierInventoryOptions } from '../scripts/publish-supplier-inventory-from-env.js';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  buildPublishSupplierInventoryOptions,
+  inspectPublishSupplierInventoryConfig
+} from '../scripts/publish-supplier-inventory-from-env.js';
+import {
+  formatSupplierInventoryConfigText,
+  writeGithubOutput
+} from '../scripts/check-supplier-inventory-config.js';
 
 describe('supplier inventory env publisher config', () => {
   it('loads JSON input lists without splitting signed URL punctuation', () => {
@@ -96,6 +106,76 @@ describe('supplier inventory env publisher config', () => {
       'https://manual.example.com/today-south.zip?signature=x;y,z'
     ]);
     assert.equal(options.sourceManifest, 'https://manual.example.com/sources.json?signature=manual');
+  });
+
+  it('reports non-sensitive workflow-dispatch configuration status', () => {
+    const report = inspectPublishSupplierInventoryConfig({
+      HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE: [
+        'https://manual.example.com/today-north.xlsx?signature=a,b;c',
+        'https://manual.example.com/today-south.zip?token=secret-value'
+      ].join('\n'),
+      HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON: JSON.stringify([
+        'https://secret.example.com/scheduled.csv'
+      ]),
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_OVERRIDE: 'https://manual.example.com/sources.json?signature=manual',
+      HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON: '{"Authorization":"Bearer supplier-token"}',
+      HOTEL_SUPPLIER_FIELD_MAP_JSON: '{"price":"rate.sale"}',
+      HOTEL_SUPPLIER_CHECK_IN: '2026-06-06',
+      HOTEL_SUPPLIER_CHECK_OUT: '2026-06-07',
+      HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY: '20',
+      HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS: '120000',
+      HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS: '6',
+      HOTEL_SUPPLIER_INVENTORY_BASE_URL: 'https://cdn.example.com/hotel-price-search/'
+    });
+    const text = formatSupplierInventoryConfigText(report);
+
+    assert.equal(report.configured, true);
+    assert.equal(report.inputCount, 2);
+    assert.equal(report.inputSource, 'workflow-dispatch');
+    assert.equal(report.manifestConfigured, true);
+    assert.equal(report.manifestSource, 'workflow-dispatch');
+    assert.equal(report.headersConfigured, true);
+    assert.equal(report.fieldMapConfigured, true);
+    assert.equal(report.checkInConfigured, true);
+    assert.equal(report.checkOutConfigured, true);
+    assert.equal(report.minHotelsPerCity, '20');
+    assert.equal(report.minTotalPricedRows, '120000');
+    assert.equal(report.maxPriceAgeHours, '6');
+    assert.equal(report.inventoryBaseUrlConfigured, true);
+    assert.match(text, /Inventory inputs: 2 \(workflow-dispatch\)/);
+    assert.doesNotMatch(text, /manual\.example\.com/);
+    assert.doesNotMatch(text, /secret-value/);
+    assert.doesNotMatch(text, /supplier-token/);
+  });
+
+  it('reports missing supplier configuration without throwing', () => {
+    const report = inspectPublishSupplierInventoryConfig({});
+
+    assert.equal(report.configured, false);
+    assert.equal(report.inputCount, 0);
+    assert.equal(report.inputSource, 'none');
+    assert.equal(report.manifestConfigured, false);
+    assert.equal(report.manifestSource, 'none');
+    assert.match(formatSupplierInventoryConfigText(report), /Next action:/);
+  });
+
+  it('writes GitHub Actions outputs for workflow gating', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-config-output-'));
+    const outputPath = join(root, 'github-output');
+    try {
+      await writeGithubOutput(outputPath, inspectPublishSupplierInventoryConfig({
+        HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE: 'https://manual.example.com/today.xlsx'
+      }));
+      const output = await readFile(outputPath, 'utf8');
+
+      assert.match(output, /^configured=true$/m);
+      assert.match(output, /^input_count=1$/m);
+      assert.match(output, /^input_source=workflow-dispatch$/m);
+      assert.match(output, /^manifest_configured=false$/m);
+      assert.match(output, /^manifest_source=none$/m);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('requires at least one configured supplier inventory input', () => {
