@@ -262,7 +262,9 @@ async function importRemoteInventoryUrl() {
   try {
     const data = await importRemoteInventorySource(sourceUrl, { persist: true });
     await syncProviderPanels(data.providers);
-    elements.importStatus.textContent = `已加载 ${data.imported.rowCount} 条远程价格`;
+    elements.importStatus.textContent = data.imported.failedCount
+      ? `已加载 ${data.imported.rowCount} 条远程价格，${data.imported.failedCount} 个源失败`
+      : `已加载 ${data.imported.rowCount} 条远程价格`;
     elements.remoteInventoryUrlInput.value = '';
     await runSearch();
   } catch (error) {
@@ -274,21 +276,105 @@ async function importRemoteInventoryUrl() {
 
 async function importRemoteInventorySource(sourceUrl, options = {}) {
   const parsedUrl = parseRemoteInventoryUrl(sourceUrl);
-  const response = await fetch(parsedUrl.href, { cache: 'no-store' });
-  if (!response.ok) throw new Error(`远程价格源读取失败：HTTP ${response.status}`);
+  const content = await fetchRemoteInventoryText(parsedUrl.href);
+  const manifestSources = parseRemoteInventoryManifestSources(content, parsedUrl);
+  if (manifestSources.length) {
+    const data = await importRemoteInventoryManifest(parsedUrl, manifestSources);
+    if (options.persist && isStaticMode()) saveRemoteInventoryUrl(parsedUrl.href);
+    return data;
+  }
 
-  const content = await response.text();
   const filename = getRemoteInventoryFilename(parsedUrl);
-  const data = isStaticMode()
-    ? importStaticInventoryFile(filename, content, { sourceUrl: parsedUrl.href })
-    : await fetchJson('/api/imports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename, content })
-    });
+  const data = await importRemoteInventoryContent({
+    content,
+    filename,
+    sourceUrl: parsedUrl.href
+  });
 
   if (options.persist && isStaticMode()) saveRemoteInventoryUrl(parsedUrl.href);
   return data;
+}
+
+async function importRemoteInventoryManifest(manifestUrl, sources) {
+  if (isStaticMode()) {
+    state.staticInventoryRows = state.staticInventoryRows.filter((row) => row.__remoteInventoryUrl !== manifestUrl.href);
+    rebuildStaticImportNames();
+  }
+
+  let rowCount = 0;
+  let failedCount = 0;
+  let providers = null;
+
+  for (const source of sources) {
+    try {
+      const content = await fetchRemoteInventoryText(source.url);
+      const filename = getRemoteInventoryFilename(parseRemoteInventoryUrl(source.url));
+      const data = await importRemoteInventoryContent({
+        content,
+        filename,
+        sourceUrl: manifestUrl.href,
+        sourceName: source.name,
+        fieldMap: source.fieldMap
+      }, { replaceExisting: false });
+      rowCount += Number(data.imported?.rowCount || 0);
+      providers = data.providers || providers;
+    } catch {
+      failedCount += 1;
+    }
+  }
+
+  if (!rowCount) throw new Error('远程价格源清单没有加载到可用价格。');
+  return {
+    imported: {
+      filename: getRemoteInventoryFilename(manifestUrl),
+      rowCount,
+      sourceCount: sources.length,
+      failedCount
+    },
+    providers: providers || getStaticProviderStatus()
+  };
+}
+
+async function importRemoteInventoryContent(source, options = {}) {
+  const fieldMap = normalizeStaticFieldMap(source.fieldMap || {});
+  const needsTransform = Boolean(source.sourceName || Object.keys(fieldMap).length);
+  if (isStaticMode()) {
+    return importStaticInventoryFile(source.filename, source.content, {
+      sourceUrl: source.sourceUrl,
+      sourceName: source.sourceName,
+      fieldMap,
+      replaceExisting: options.replaceExisting
+    });
+  }
+
+  if (!needsTransform) {
+    return fetchJson('/api/imports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: source.filename, content: source.content })
+    });
+  }
+
+  const rows = parseStaticInventory(source.content, getStaticInventoryExtension(source.filename), { fieldMap })
+    .map((row) => ({
+      ...row,
+      source: row.source || row.provider || row.supplier || source.sourceName || row.source
+    }));
+  if (!rows.length) throw new Error('没有识别到酒店价格记录。');
+  return fetchJson('/api/imports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename: toJsonInventoryFilename(source.filename),
+      content: JSON.stringify(rows)
+    })
+  });
+}
+
+async function fetchRemoteInventoryText(sourceUrl) {
+  const response = await fetch(sourceUrl, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`远程价格源读取失败：HTTP ${response.status}`);
+  return response.text();
 }
 
 async function loadSavedRemoteInventorySources() {
@@ -848,11 +934,13 @@ function getStaticProviderStatus() {
 
 function importStaticInventoryFile(filename, content, options = {}) {
   const extension = getStaticInventoryExtension(filename);
-  if (options.sourceUrl) {
+  if (options.sourceUrl && options.replaceExisting !== false) {
     state.staticInventoryRows = state.staticInventoryRows.filter((row) => row.__remoteInventoryUrl !== options.sourceUrl);
   }
-  const rows = parseStaticInventory(content, extension).map((row) => ({
+  const fieldMap = normalizeStaticFieldMap(options.fieldMap || {});
+  const rows = parseStaticInventory(content, extension, { fieldMap }).map((row) => ({
     ...row,
+    source: row.source || row.provider || row.supplier || options.sourceName || row.source,
     __inventoryFile: filename,
     ...(options.sourceUrl ? { __remoteInventoryUrl: options.sourceUrl } : {})
   }));
@@ -878,6 +966,10 @@ function getRemoteInventoryFilename(sourceUrl) {
   return `${host}-${filename}`;
 }
 
+function toJsonInventoryFilename(filename) {
+  return String(filename || 'remote-hotel-prices').replace(/\.(csv|jsonl|ndjson)$/i, '.json');
+}
+
 function hasSupportedStaticInventoryExtension(filename) {
   return /\.(csv|json|jsonl|ndjson)$/i.test(filename);
 }
@@ -886,6 +978,29 @@ function parseRemoteInventoryUrl(sourceUrl) {
   const parsedUrl = new URL(sourceUrl, window.location.href);
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error('INVALID_REMOTE_URL');
   return parsedUrl;
+}
+
+function parseRemoteInventoryManifestSources(content, manifestUrl) {
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  const sources = Array.isArray(parsed?.sources)
+    ? parsed.sources
+    : Array.isArray(parsed?.feeds)
+      ? parsed.feeds
+      : Array.isArray(parsed?.inventorySources)
+        ? parsed.inventorySources
+        : [];
+  return sources
+    .filter((source) => source && typeof source === 'object' && (source.url || source.href))
+    .map((source, index) => ({
+      url: new URL(source.url || source.href, manifestUrl.href).href,
+      name: String(source.name || source.provider || source.supplier || `远程供应商${index + 1}`),
+      fieldMap: normalizeStaticFieldMap(source.fieldMap || source.fields || {})
+    }));
 }
 
 function loadSavedRemoteInventoryUrls() {
@@ -1251,19 +1366,21 @@ function normalizeStaticQuery(query) {
   };
 }
 
-function parseStaticInventory(content, extension) {
+function parseStaticInventory(content, extension, options = {}) {
+  const fieldMap = normalizeStaticFieldMap(options.fieldMap || {});
+  const mapRows = (rows) => rows.map((row) => mapStaticInventoryRow(row, fieldMap));
   if (extension === '.json') {
     const parsed = JSON.parse(content);
-    return flattenStaticInventoryDocument(parsed);
+    return mapRows(flattenStaticInventoryDocument(parsed));
   }
   if (extension === '.jsonl' || extension === '.ndjson') {
-    return content
+    return mapRows(content
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-      .flatMap((line) => flattenStaticInventoryDocument(JSON.parse(line)));
+      .flatMap((line) => flattenStaticInventoryDocument(JSON.parse(line))));
   }
-  return parseStaticCsv(content);
+  return mapRows(parseStaticCsv(content));
 }
 
 function getStaticInventoryExtension(filename) {
@@ -1413,6 +1530,41 @@ function pickStatic(row, field) {
     if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key];
   }
   return undefined;
+}
+
+function mapStaticInventoryRow(row, fieldMap = {}) {
+  if (!fieldMap || !Object.keys(fieldMap).length) return row;
+  const mapped = { ...row };
+  Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
+    const value = getMappedStaticValue(row, sourcePath);
+    if (value !== undefined && value !== null && String(value).trim() !== '') mapped[targetField] = value;
+  });
+  return mapped;
+}
+
+function getMappedStaticValue(row, sourcePath) {
+  const paths = Array.isArray(sourcePath) ? sourcePath : [sourcePath];
+  for (const path of paths) {
+    const value = getStaticPathValue(row, path);
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function getStaticPathValue(value, path) {
+  if (!path) return undefined;
+  return String(path).split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    return current[key];
+  }, value);
+}
+
+function normalizeStaticFieldMap(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([, sourcePath]) =>
+    typeof sourcePath === 'string' ||
+    (Array.isArray(sourcePath) && sourcePath.every((item) => typeof item === 'string'))
+  ));
 }
 
 function parseStaticMoney(value) {

@@ -100,6 +100,33 @@ npm start
 
 也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL，并会在浏览器里保存远程源、下次打开自动重载；远程服务需要允许跨域访问。
 
+如果有多家供应商远程导出，也可以把 URL 填成一个清单 JSON。每个供应商可配置自己的 `fieldMap`，用于把非标准字段映射到内部字段：
+
+```json
+{
+  "sources": [
+    {
+      "name": "ctrip",
+      "url": "https://example.com/ctrip-prices.json",
+      "fieldMap": {
+        "id": "offerId",
+        "name": "hotel.title",
+        "province": "hotel.provinceName",
+        "city": "hotel.cityName",
+        "price": ["rate.sale", "price"],
+        "checkIn": "stay.from",
+        "checkOut": "stay.to",
+        "bookingUrl": "rate.book"
+      }
+    },
+    {
+      "name": "meituan",
+      "url": "https://example.com/meituan-prices.csv"
+    }
+  ]
+}
+```
+
 ## 功能
 
 - 全国、省份、城市、酒店名、商圈、设施关键词搜索
@@ -112,6 +139,7 @@ npm start
 - 真实库存覆盖率看板：展示已覆盖城市数、总城市数、真实酒店数、按供应商覆盖和缺口城市
 - 多供应商文件合并，同酒店保留多报价并优先显示最低价
 - 网页上传供应商 CSV/JSON/JSONL，无需重启服务即可查询导入价格
+- GitHub Pages 静态版支持远程供应商清单 manifest、多源自动重载和每源字段映射
 - `/api/status` 查看当前供应商接入状态
 - `/api/coverage` 查看真实库存全国覆盖率，包含逐城市覆盖、按供应商分组覆盖和缺口城市；可传 `checkIn` / `checkOut` 计算指定入住日期的可售覆盖；`/api/coverage?format=csv` 或 `/api/coverage.csv` 可下载逐城市覆盖/缺口清单，CSV 会标出覆盖该城市的供应商来源
 - `/api/imports` 查看或上传供应商文件
