@@ -388,12 +388,10 @@ npm run build:pages
 如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：
 
 ```bash
-npm run build:inventory-manifest
-npm run audit:inventory-coverage -- --require-all-cities
 npm run build:pages
 ```
 
-生成脚本会扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市，写入 `public/hotel-inventory.manifest.json`。如果库存文件托管在独立对象存储，可用 `--base-url` 生成绝对 URL：
+`build:pages` 会先扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市，刷新 `public/hotel-inventory.manifest.json`，再递归复制到 `docs/`。如果库存文件托管在独立对象存储，可用 `--base-url` 手动生成绝对 URL：
 
 ```bash
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
@@ -403,7 +401,6 @@ npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-
 
 ```bash
 npm run split:inventory-shards -- --input /absolute/path/supplier-nationwide.csv --clean
-npm run audit:inventory-coverage
 npm run build:pages
 ```
 
@@ -414,6 +411,7 @@ npm run build:pages
 ```bash
 npm run audit:inventory-coverage
 npm run audit:inventory-coverage -- --require-all-cities --missing-csv missing-cities.csv
+HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true npm run build:pages
 ```
 
-`--require-all-cities` 会在任一城市缺库存分片、存在未知城市名或存在未标注 `cities` / `provinces` 的源时返回非零退出码，适合放进部署流水线，防止“全国都要有”的数据目标被漏掉。
+`--require-all-cities` 和 `HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true` 会在任一城市缺库存分片、存在未知城市名或存在未标注 `cities` / `provinces` 的源时返回非零退出码，防止“全国都要有”的数据目标被漏掉。
