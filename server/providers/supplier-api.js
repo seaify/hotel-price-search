@@ -6,15 +6,17 @@ const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|pass
 export function getSupplierApiStatus() {
   const sources = getSupplierApiSources();
   const firstSource = sources[0] || null;
+  const methods = unique(sources.map((source) => source.method));
   return {
     configured: sources.length > 0,
     name: getSupplierApiName(),
     url: firstSource ? redactUrl(firstSource.url) : '',
     urls: sources.map((source) => redactUrl(source.url)),
     apiCount: sources.length,
-    method: getSupplierApiMethod(),
-    timeoutMs: getSupplierApiTimeoutMs(),
-    headersConfigured: Boolean(process.env.HOTEL_SUPPLIER_API_HEADERS)
+    method: methods.length === 1 ? methods[0] : methods.length ? 'MIXED' : getSupplierApiMethod(),
+    methods,
+    timeoutMs: firstSource?.timeoutMs || getSupplierApiTimeoutMs(),
+    headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0)
   };
 }
 
@@ -76,17 +78,17 @@ async function readSupplierApiSource(source, params) {
 }
 
 function buildSupplierApiRequest(source, params) {
-  const method = getSupplierApiMethod();
+  const method = source.method || getSupplierApiMethod();
   const url = new URL(source.url);
   const query = buildSupplierQuery(params);
   const headers = {
     Accept: 'application/json, text/csv, application/x-ndjson',
-    ...getSupplierApiHeaders()
+    ...(source.headers || getSupplierApiHeaders())
   };
   const init = {
     method,
     headers,
-    signal: AbortSignal.timeout(getSupplierApiTimeoutMs())
+    signal: AbortSignal.timeout(source.timeoutMs || getSupplierApiTimeoutMs())
   };
 
   if (method === 'GET') {
@@ -120,6 +122,7 @@ function buildSupplierQuery(params) {
 }
 
 function getSupplierApiSources() {
+  const configuredSources = getSupplierApiConfigSources();
   const urls = [
     process.env.HOTEL_SUPPLIER_API_URLS,
     process.env.HOTEL_SUPPLIER_API_URL
@@ -136,11 +139,33 @@ function getSupplierApiSources() {
     .flatMap((value) => String(value).split(/[\n,;]/))
     .map((value) => value.trim())
     .filter(Boolean);
+  const method = getSupplierApiMethod();
+  const headers = getSupplierApiHeaders();
+  const timeoutMs = getSupplierApiTimeoutMs();
 
-  return urls.map((url, index) => ({
+  const envSources = urls.map((url, index) => ({
     url,
-    name: names[index] || names[0] || getSupplierApiName()
+    name: names[index] || names[0] || getSupplierApiName(),
+    method,
+    headers,
+    timeoutMs
   }));
+  return [...configuredSources, ...envSources];
+}
+
+function getSupplierApiConfigSources() {
+  if (!process.env.HOTEL_SUPPLIER_API_CONFIG) return [];
+  const parsed = JSON.parse(process.env.HOTEL_SUPPLIER_API_CONFIG);
+  const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.sources) ? parsed.sources : [parsed];
+  return items
+    .filter((item) => item && typeof item === 'object' && (item.url || item.endpoint))
+    .map((item, index) => ({
+      url: String(item.url || item.endpoint),
+      name: String(item.name || item.provider || `实时供应商${index + 1}`),
+      method: normalizeMethod(item.method || getSupplierApiMethod()),
+      headers: normalizeHeaders(item.headers || {}),
+      timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs())
+    }));
 }
 
 function getSupplierApiName() {
@@ -148,13 +173,21 @@ function getSupplierApiName() {
 }
 
 function getSupplierApiMethod() {
-  const method = String(process.env.HOTEL_SUPPLIER_API_METHOD || 'GET').trim().toUpperCase();
-  return method === 'POST' ? 'POST' : 'GET';
+  return normalizeMethod(process.env.HOTEL_SUPPLIER_API_METHOD || 'GET');
 }
 
 function getSupplierApiHeaders() {
   if (!process.env.HOTEL_SUPPLIER_API_HEADERS) return {};
-  const parsed = JSON.parse(process.env.HOTEL_SUPPLIER_API_HEADERS);
+  return normalizeHeaders(process.env.HOTEL_SUPPLIER_API_HEADERS);
+}
+
+function normalizeMethod(value) {
+  const method = String(value || 'GET').trim().toUpperCase();
+  return method === 'POST' ? 'POST' : 'GET';
+}
+
+function normalizeHeaders(value) {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
     throw new Error('HOTEL_SUPPLIER_API_HEADERS 必须是 JSON 对象。');
   }
@@ -162,8 +195,12 @@ function getSupplierApiHeaders() {
 }
 
 function getSupplierApiTimeoutMs() {
-  const number = Number(process.env.HOTEL_SUPPLIER_API_TIMEOUT_MS);
-  return Number.isFinite(number) && number > 0 ? Math.round(number) : defaultSupplierApiTimeoutMs;
+  return getPositiveInteger(process.env.HOTEL_SUPPLIER_API_TIMEOUT_MS, defaultSupplierApiTimeoutMs);
+}
+
+function getPositiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
 function getSupplierApiResponseFormat(url, contentType) {
@@ -185,4 +222,8 @@ function redactUrl(value) {
   } catch {
     return String(value || '');
   }
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
 }

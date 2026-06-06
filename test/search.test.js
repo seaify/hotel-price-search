@@ -1109,6 +1109,7 @@ describe('hotel search data', () => {
     const previousDataUrls = process.env.HOTEL_DATA_URLS;
     const previousApiUrl = process.env.HOTEL_SUPPLIER_API_URL;
     const previousApiUrls = process.env.HOTEL_SUPPLIER_API_URLS;
+    const previousApiConfig = process.env.HOTEL_SUPPLIER_API_CONFIG;
     const previousApiName = process.env.HOTEL_SUPPLIER_API_NAME;
     const previousApiNames = process.env.HOTEL_SUPPLIER_API_NAMES;
     const previousApiMethod = process.env.HOTEL_SUPPLIER_API_METHOD;
@@ -1122,6 +1123,7 @@ describe('hotel search data', () => {
     delete process.env.HOTEL_DATA_URL;
     delete process.env.HOTEL_DATA_URLS;
     delete process.env.HOTEL_SUPPLIER_API_URLS;
+    delete process.env.HOTEL_SUPPLIER_API_CONFIG;
     delete process.env.HOTEL_SUPPLIER_API_NAMES;
     delete process.env.AMADEUS_CLIENT_ID;
     delete process.env.AMADEUS_CLIENT_SECRET;
@@ -1231,6 +1233,11 @@ describe('hotel search data', () => {
       } else {
         process.env.HOTEL_SUPPLIER_API_URLS = previousApiUrls;
       }
+      if (previousApiConfig === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_CONFIG = previousApiConfig;
+      }
       if (previousApiName === undefined) {
         delete process.env.HOTEL_SUPPLIER_API_NAME;
       } else {
@@ -1274,6 +1281,7 @@ describe('hotel search data', () => {
     const previousDataUrls = process.env.HOTEL_DATA_URLS;
     const previousApiUrl = process.env.HOTEL_SUPPLIER_API_URL;
     const previousApiUrls = process.env.HOTEL_SUPPLIER_API_URLS;
+    const previousApiConfig = process.env.HOTEL_SUPPLIER_API_CONFIG;
     const previousApiName = process.env.HOTEL_SUPPLIER_API_NAME;
     const previousApiNames = process.env.HOTEL_SUPPLIER_API_NAMES;
     const previousApiMethod = process.env.HOTEL_SUPPLIER_API_METHOD;
@@ -1287,6 +1295,7 @@ describe('hotel search data', () => {
     delete process.env.HOTEL_DATA_URL;
     delete process.env.HOTEL_DATA_URLS;
     delete process.env.HOTEL_SUPPLIER_API_URL;
+    delete process.env.HOTEL_SUPPLIER_API_CONFIG;
     delete process.env.HOTEL_SUPPLIER_API_NAME;
     delete process.env.AMADEUS_CLIENT_ID;
     delete process.env.AMADEUS_CLIENT_SECRET;
@@ -1404,6 +1413,206 @@ describe('hotel search data', () => {
         delete process.env.HOTEL_SUPPLIER_API_URLS;
       } else {
         process.env.HOTEL_SUPPLIER_API_URLS = previousApiUrls;
+      }
+      if (previousApiConfig === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_CONFIG = previousApiConfig;
+      }
+      if (previousApiName === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_NAME;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_NAME = previousApiName;
+      }
+      if (previousApiNames === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_NAMES;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_NAMES = previousApiNames;
+      }
+      if (previousApiMethod === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_METHOD;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_METHOD = previousApiMethod;
+      }
+      if (previousApiHeaders === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_HEADERS;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_HEADERS = previousApiHeaders;
+      }
+      if (previousAmadeusId === undefined) {
+        delete process.env.AMADEUS_CLIENT_ID;
+      } else {
+        process.env.AMADEUS_CLIENT_ID = previousAmadeusId;
+      }
+      if (previousAmadeusSecret === undefined) {
+        delete process.env.AMADEUS_CLIENT_SECRET;
+      } else {
+        process.env.AMADEUS_CLIENT_SECRET = previousAmadeusSecret;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('supports per-source live supplier API config with mixed methods and headers', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-config-'));
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousApiUrl = process.env.HOTEL_SUPPLIER_API_URL;
+    const previousApiUrls = process.env.HOTEL_SUPPLIER_API_URLS;
+    const previousApiConfig = process.env.HOTEL_SUPPLIER_API_CONFIG;
+    const previousApiName = process.env.HOTEL_SUPPLIER_API_NAME;
+    const previousApiNames = process.env.HOTEL_SUPPLIER_API_NAMES;
+    const previousApiMethod = process.env.HOTEL_SUPPLIER_API_METHOD;
+    const previousApiHeaders = process.env.HOTEL_SUPPLIER_API_HEADERS;
+    const previousAmadeusId = process.env.AMADEUS_CLIENT_ID;
+    const previousAmadeusSecret = process.env.AMADEUS_CLIENT_SECRET;
+    const requests = [];
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_SUPPLIER_API_URL;
+    delete process.env.HOTEL_SUPPLIER_API_URLS;
+    delete process.env.HOTEL_SUPPLIER_API_NAME;
+    delete process.env.HOTEL_SUPPLIER_API_NAMES;
+    delete process.env.HOTEL_SUPPLIER_API_METHOD;
+    delete process.env.HOTEL_SUPPLIER_API_HEADERS;
+    delete process.env.AMADEUS_CLIENT_ID;
+    delete process.env.AMADEUS_CLIENT_SECRET;
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    const supplierServer = createHttpServer(async (request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      requests.push({
+        path: url.pathname,
+        method: request.method,
+        city: url.searchParams.get('city'),
+        authorization: request.headers.authorization,
+        apiKey: request.headers['x-api-key'],
+        body: body ? JSON.parse(body) : null
+      });
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: 'config-live-001',
+            hotelName: '武汉配置实时供应商酒店',
+            province: '湖北省',
+            city: '武汉市',
+            district: '江汉',
+            address: '武汉市江汉区建设大道 1 号',
+            price: url.pathname === '/get-prices' ? 620 : 580,
+            source: url.pathname === '/get-prices' ? '配置GET供应商' : '配置POST供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true,
+            bookingUrl: url.pathname === '/post-prices' ? 'https://example.com/config-post' : ''
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify([
+      {
+        name: '配置GET供应商',
+        url: `http://127.0.0.1:${address.port}/get-prices?token=get-secret`,
+        method: 'GET',
+        headers: { Authorization: 'Bearer get-token' }
+      },
+      {
+        name: '配置POST供应商',
+        url: `http://127.0.0.1:${address.port}/post-prices?key=post-secret`,
+        method: 'POST',
+        headers: { 'X-Api-Key': 'post-key' }
+      }
+    ]);
+
+    try {
+      const result = await searchHotels({
+        city: '武汉',
+        keyword: '配置实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        adults: '2',
+        rooms: '1'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '武汉配置实时供应商酒店');
+      assert.equal(result.hotels[0].price, 580);
+      assert.equal(result.hotels[0].offerCount, 2);
+      assert.equal(result.hotels[0].bookingUrl, 'https://example.com/config-post');
+      assert.deepEqual(result.hotels[0].providerNames.sort(), ['配置GET供应商', '配置POST供应商'].sort());
+      assert.equal(result.providers.supplierApi.apiCount, 2);
+      assert.equal(result.providers.supplierApi.method, 'MIXED');
+      assert.deepEqual(result.providers.supplierApi.methods.sort(), ['GET', 'POST']);
+      assert.equal(result.providers.supplierApi.headersConfigured, true);
+      assert.deepEqual(result.providers.supplierApi.urls, [
+        `http://127.0.0.1:${address.port}/get-prices?token=REDACTED`,
+        `http://127.0.0.1:${address.port}/post-prices?key=REDACTED`
+      ]);
+
+      const getRequest = requests.find((item) => item.path === '/get-prices');
+      const postRequest = requests.find((item) => item.path === '/post-prices');
+      assert.equal(getRequest.method, 'GET');
+      assert.equal(getRequest.city, '武汉');
+      assert.equal(getRequest.authorization, 'Bearer get-token');
+      assert.equal(postRequest.method, 'POST');
+      assert.equal(postRequest.apiKey, 'post-key');
+      assert.equal(postRequest.body.city, '武汉');
+      assert.equal(postRequest.body.checkIn, '2026-06-06');
+      assert.equal(postRequest.body.checkOut, '2026-06-07');
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousApiUrl === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_URL;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_URL = previousApiUrl;
+      }
+      if (previousApiUrls === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_URLS;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_URLS = previousApiUrls;
+      }
+      if (previousApiConfig === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_CONFIG = previousApiConfig;
       }
       if (previousApiName === undefined) {
         delete process.env.HOTEL_SUPPLIER_API_NAME;
