@@ -13,7 +13,7 @@ npm start
 
 ## 接入真实价格
 
-最直接的方式是接入供应商、渠道管理系统或酒店价格聚合服务导出的 CSV/JSON/JSONL 文件。可以接一个文件，也可以接多个供应商文件；本地和远程源也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz` 压缩包：
+最直接的方式是接入供应商、渠道管理系统或酒店价格聚合服务导出的 CSV/JSON/JSONL/XLSX 文件。可以接一个文件，也可以接多个供应商文件；本地和远程源也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz` 压缩包：
 
 ```bash
 export HOTEL_DATA_FILE=/absolute/path/to/hotel-prices.csv
@@ -42,7 +42,7 @@ export HOTEL_DATA_STALE_CACHE_SECONDS=300
 npm start
 ```
 
-远程 URL 使用和本地 CSV/JSON/JSONL 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。远程文件默认缓存 60 秒，可用 `HOTEL_DATA_CACHE_SECONDS` 调整刷新间隔；本地文件会按修改时间和文件大小自动刷新。`HOTEL_DATA_STALE_CACHE_SECONDS` 可在远程源临时失败时继续使用最近成功拉取的过期缓存。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。`/api/status` 的 `providers.localInventory.remoteInventory.loads` 会列出每个远程源的加载状态、行数、缓存命中和失败原因。
+远程 URL 使用和本地 CSV/JSON/JSONL/XLSX 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。远程文件默认缓存 60 秒，可用 `HOTEL_DATA_CACHE_SECONDS` 调整刷新间隔；本地文件会按修改时间和文件大小自动刷新。`HOTEL_DATA_STALE_CACHE_SECONDS` 可在远程源临时失败时继续使用最近成功拉取的过期缓存。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。`/api/status` 的 `providers.localInventory.remoteInventory.loads` 会列出每个远程源的加载状态、行数、缓存命中和失败原因。
 
 如果多家远程供应商字段不同，也可以配置一个远程清单 URL。Node 后端会读取清单里的多个供应商导出源，并按每个源的 `fieldMap` 做字段映射：
 
@@ -283,7 +283,7 @@ npm start
 
 当前实时适配器使用 Amadeus Hotel List 和 Hotel Search 接口。国内酒店“全国全量、实时、可预订”需要携程、同程、美团、飞猪、Booking.com、Amadeus 等供应商的正式接口、分销合作或渠道管理系统数据，仅靠前端页面无法保证全量实时价格。
 
-也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL，并会在浏览器里保存远程源、下次打开自动重载；远程服务需要允许跨域访问。静态版接入远程清单后，页面会在“接入状态”里显示每个远程源的加载结果、行数和失败摘要；一旦浏览器实际加载到价格行，侧栏会按当前入住日期即时显示“导入验收”，要求全国目录里的每个城市都有至少 1 家可解析正价酒店。线上页面左侧也提供供应商 CSV 模板和多源清单模板下载，方便把字段要求直接交给供应商或渠道系统。
+也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL/XLSX，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL/XLSX，并会在浏览器里保存远程源、下次打开自动重载；远程服务需要允许跨域访问。静态版接入远程清单后，页面会在“接入状态”里显示每个远程源的加载结果、行数和失败摘要；一旦浏览器实际加载到价格行，侧栏会按当前入住日期即时显示“导入验收”，要求全国目录里的每个城市都有至少 1 家可解析正价酒店。线上页面左侧也提供供应商 CSV 模板和多源清单模板下载，方便把字段要求直接交给供应商或渠道系统。
 
 GitHub Pages 静态版默认会自动读取 `hotel-inventory.manifest.json`。把各供应商按省份、城市或渠道拆成多个 CSV/JSON/JSONL 分片后写入 `public/hotel-inventory.manifest.json`，再执行 `npm run build:pages`，上线页面会按目的地自动加载对应远程价格。清单源带 `cities` / `provinces` 时会在搜索对应城市或省份时懒加载；页面会先展示清单声明覆盖城市数，方便确认全国分片是否齐全；不带范围或设置 `preload: true` 时会启动即加载。也可以用 URL 参数临时接源：
 
@@ -330,7 +330,7 @@ https://seaify.github.io/hotel-price-search/?inventoryUrl=https%3A%2F%2Fexample.
 - 数据源状态提示：本地真实库存、实时接口、回退或示例数据
 - 真实库存覆盖率看板：展示已覆盖城市数、总城市数、真实酒店数、按供应商覆盖和缺口城市
 - 多供应商文件合并，同酒店保留多报价并优先显示最低价
-- 网页上传供应商 CSV/JSON/JSONL，无需重启服务即可查询导入价格
+- 网页上传供应商 CSV/JSON/JSONL/XLSX，无需重启服务即可查询导入价格
 - Node 版和 GitHub Pages 静态版都支持远程供应商清单 manifest、多源自动重载、每源字段映射和远程源健康明细
 - 实时供应商 API 支持每源请求字段映射、目的地编码映射、城市级扇出、分页元数据和覆盖探测
 - `/api/status` 查看当前供应商接入状态
@@ -353,7 +353,7 @@ npm test
 npm run build:pages
 ```
 
-构建结果在 `docs/`，GitHub Pages 选择 `main` 分支的 `/docs` 目录即可。Pages 静态版没有 Node 后端，仍可使用全国示例价格库，也支持在浏览器内导入 CSV/JSON/JSONL 后查询，并可下载逐城市覆盖缺口表；需要服务器保存上传文件、读取 gzip 压缩包或接实时 API 时，请使用 `npm start` 的 Node 版本。
+构建结果在 `docs/`，GitHub Pages 选择 `main` 分支的 `/docs` 目录即可。Pages 静态版没有 Node 后端，仍可使用全国示例价格库，也支持在浏览器内导入 CSV/JSON/JSONL/XLSX 后查询，并可下载逐城市覆盖缺口表；需要服务器保存上传文件、读取 gzip 压缩包或接实时 API 时，请使用 `npm start` 的 Node 版本。
 
 如果要让 GitHub Pages 页面打开后自动加载真实供应商库存，把公开或签名的供应商导出 URL 写入 [public/hotel-inventory.manifest.json](public/hotel-inventory.manifest.json)，例如：
 

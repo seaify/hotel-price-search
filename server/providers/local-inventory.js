@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { parseXlsxInventory } from '../../scripts/xlsx-inventory.js';
 import {
   applyFilters,
   cityCatalog,
@@ -16,9 +17,9 @@ const defaultRemoteMaxBytes = 12 * 1024 * 1024;
 const defaultRemoteTimeoutMs = 8_000;
 const defaultInventoryCacheSeconds = 60;
 const defaultInventoryStaleCacheSeconds = 0;
-const allowedImportExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
-const allowedInventoryFormats = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']);
-const gzipFormats = new Set(['.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']);
+const allowedImportExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.xlsx']);
+const allowedInventoryFormats = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.xlsx', '.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz', '.xlsx.gz']);
+const gzipFormats = new Set(['.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz', '.xlsx.gz']);
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const inventoryCache = new Map();
 const inventoryCollectionKeys = ['hotels', 'items', 'data', 'results', 'records', 'list', '酒店列表', '酒店'];
@@ -182,20 +183,22 @@ export async function listImportedInventoryFiles() {
   }
 }
 
-export async function saveImportedInventoryFile({ filename, content }) {
+export async function saveImportedInventoryFile(payload = {}) {
+  const { filename } = payload;
   const safeName = sanitizeImportFilename(filename);
   const extension = extname(safeName).toLowerCase();
   if (!allowedImportExtensions.has(extension)) {
-    throw new Error('仅支持 .csv、.json、.jsonl 或 .ndjson 酒店价格文件。');
+    throw new Error('仅支持 .csv、.json、.jsonl、.ndjson 或 .xlsx 酒店价格文件。');
   }
-  if (typeof content !== 'string' || content.trim().length === 0) {
+  const normalizedPayload = normalizeImportPayload(payload, extension);
+  if (normalizedPayload.size === 0) {
     throw new Error('文件内容不能为空。');
   }
-  if (Buffer.byteLength(content, 'utf8') > maxImportBytes) {
+  if (normalizedPayload.size > maxImportBytes) {
     throw new Error('单个导入文件不能超过 8MB。');
   }
 
-  const rows = parseInventory(content, extension);
+  const rows = parseInventory(normalizedPayload.content, extension);
   if (!rows.length) {
     throw new Error('没有识别到酒店价格记录。');
   }
@@ -204,7 +207,7 @@ export async function saveImportedInventoryFile({ filename, content }) {
   await mkdir(importDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
   const targetPath = join(importDir, `${stamp}-${safeName}`);
-  await writeFile(targetPath, content, 'utf8');
+  await writeFile(targetPath, normalizedPayload.content, normalizedPayload.encoding);
   const info = await stat(targetPath);
 
   return {
@@ -249,9 +252,11 @@ export async function getLocalInventoryCoverage(status = null, params = {}) {
 export function parseInventory(raw, extension = '.json', options = {}) {
   const fieldMap = normalizeFieldMap(options.fieldMap || {});
   const mapRows = (rows) => rows.map((row) => mapInventoryRow(row, fieldMap));
-  if (extension === '.csv') return mapRows(parseCsv(raw));
-  if (extension === '.jsonl' || extension === '.ndjson') return mapRows(parseJsonLines(raw));
-  const parsed = JSON.parse(raw);
+  if (extension === '.xlsx') return mapRows(parseXlsxInventory(asBuffer(raw)));
+  const content = asText(raw);
+  if (extension === '.csv') return mapRows(parseCsv(content));
+  if (extension === '.jsonl' || extension === '.ndjson') return mapRows(parseJsonLines(content));
+  const parsed = JSON.parse(content);
   return mapRows(flattenInventoryDocument(parsed));
 }
 
@@ -570,8 +575,8 @@ async function readInventoryFile(file) {
   }
 
   const raw = await readFile(file.filePath);
-  const { text, format } = decodeInventoryContent(raw, file.filePath);
-  const rows = parseInventory(text, format);
+  const { content, format } = decodeInventoryContent(raw, file.filePath);
+  const rows = parseInventory(content, format);
   inventoryCache.set(cacheKey, {
     type: 'file',
     size: file.size,
@@ -594,8 +599,8 @@ async function readRemoteInventoryUrl(url, options = {}) {
 
   let rows;
   try {
-    const { text, format } = await fetchRemoteInventoryContent(url, { headers });
-    rows = parseInventory(text, format, { fieldMap }).map((row) => ({
+    const { content, format } = await fetchRemoteInventoryContent(url, { headers });
+    rows = parseInventory(content, format, { fieldMap }).map((row) => ({
       ...row,
       source: row.source || row.provider || row.supplier || options.sourceName || row.source
     }));
@@ -667,8 +672,8 @@ async function readRemoteInventoryManifestUrl(url) {
 
   let sources;
   try {
-    const { text } = await fetchRemoteInventoryContent(url);
-    sources = parseRemoteInventoryManifestSources(text, url);
+    const { content } = await fetchRemoteInventoryContent(url);
+    sources = parseRemoteInventoryManifestSources(asText(content), url);
     if (!sources.length) {
       throw new Error(`${redactRemoteUrl(url)} 没有识别到远程供应商清单。`);
     }
@@ -877,12 +882,13 @@ async function fetchRemoteInventoryContent(url, options = {}) {
 
   const contentType = response.headers.get('content-type') || '';
   const contentEncoding = response.headers.get('content-encoding') || '';
-  const { text, format } = decodeInventoryContent(raw, url, contentType, contentEncoding);
-  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+  const { content, format } = decodeInventoryContent(raw, url, contentType, contentEncoding);
+  const decodedSize = Buffer.isBuffer(content) ? content.byteLength : Buffer.byteLength(content, 'utf8');
+  if (decodedSize > maxBytes) {
     throw new Error(`${redactRemoteUrl(url)} 解压后文件超过 ${formatBytes(maxBytes)} 限制。`);
   }
   return {
-    text,
+    content,
     format
   };
 }
@@ -959,9 +965,10 @@ function decodeInventoryContent(buffer, source, contentType = '', contentEncodin
   const format = getInventoryFormat(source, contentType);
   const shouldGunzip = gzipFormats.has(format) || contentEncoding.toLowerCase().includes('gzip');
   const decoded = shouldGunzip && isGzipBuffer(buffer) ? gunzipSync(buffer) : buffer;
+  const normalizedFormat = normalizeInventoryFormat(format);
   return {
-    text: decoded.toString('utf8'),
-    format: normalizeInventoryFormat(format)
+    content: normalizedFormat === '.xlsx' ? decoded : decoded.toString('utf8'),
+    format: normalizedFormat
   };
 }
 
@@ -973,6 +980,7 @@ function getInventoryFormat(source, contentType = '') {
   }
 
   const loweredType = contentType.toLowerCase();
+  if (loweredType.includes('spreadsheetml.sheet')) return '.xlsx';
   if (loweredType.includes('ndjson') || loweredType.includes('jsonl')) return '.jsonl';
   if (loweredType.includes('csv')) return '.csv';
   if (loweredType.includes('json')) return '.json';
@@ -993,6 +1001,36 @@ function normalizeInventoryFormat(format) {
 
 function isGzipBuffer(buffer) {
   return buffer?.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+}
+
+function normalizeImportPayload(payload, extension) {
+  if (payload.contentBase64) {
+    return {
+      content: Buffer.from(String(payload.contentBase64), 'base64'),
+      encoding: undefined,
+      size: Buffer.byteLength(String(payload.contentBase64), 'base64')
+    };
+  }
+  if (typeof payload.content !== 'string') return { content: '', encoding: 'utf8', size: 0 };
+  if (extension === '.xlsx') {
+    const buffer = Buffer.from(payload.content, 'base64');
+    return { content: buffer, encoding: undefined, size: buffer.byteLength };
+  }
+  return {
+    content: payload.content,
+    encoding: 'utf8',
+    size: Buffer.byteLength(payload.content, 'utf8')
+  };
+}
+
+function asBuffer(value) {
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  return Buffer.isBuffer(value) ? value : Buffer.from(String(value || ''), 'utf8');
+}
+
+function asText(value) {
+  return Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '');
 }
 
 function getRemoteTimeoutMs() {

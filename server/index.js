@@ -544,8 +544,8 @@ async function readJsonBody(request) {
   let body = '';
   for await (const chunk of request) {
     body += chunk;
-    if (Buffer.byteLength(body, 'utf8') > 10 * 1024 * 1024) {
-      throw new Error('请求体不能超过 10MB。');
+    if (Buffer.byteLength(body, 'utf8') > 16 * 1024 * 1024) {
+      throw new Error('请求体不能超过 16MB。');
     }
   }
   try {

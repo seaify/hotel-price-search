@@ -227,21 +227,22 @@ async function importInventoryFile() {
   elements.importButton.disabled = true;
   elements.importStatus.textContent = '正在导入';
   try {
-    const content = await file.text();
+    const extension = getStaticInventoryExtension(file.name);
+    const content = extension === '.xlsx' ? await file.arrayBuffer() : await file.text();
     let data;
     try {
       if (isStaticMode()) {
-        data = importStaticInventoryFile(file.name, content);
+        data = await importStaticInventoryFile(file.name, content);
       } else {
         data = await fetchJson('/api/imports', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: file.name, content })
+          body: JSON.stringify(await buildInventoryImportPayload(file.name, content))
         });
       }
     } catch (error) {
       if (error.status && ![404, 405, 501].includes(error.status)) throw error;
-      data = importStaticInventoryFile(file.name, content);
+      data = await importStaticInventoryFile(file.name, content);
     }
     await syncProviderPanels(data.providers);
     elements.importStatus.textContent = `已导入 ${data.imported.rowCount} 条`;
@@ -294,9 +295,9 @@ async function importRemoteInventorySource(sourceUrl, options = {}) {
     type: 'source'
   });
 
-  let content;
+  let remoteContent;
   try {
-    content = await fetchRemoteInventoryText(parsedUrl.href);
+    remoteContent = await fetchRemoteInventoryContent(parsedUrl.href);
   } catch (error) {
     setRemoteInventoryLoad({
       key: parsedUrl.href,
@@ -311,18 +312,20 @@ async function importRemoteInventorySource(sourceUrl, options = {}) {
     throw error;
   }
 
-  const manifestSources = parseRemoteInventoryManifestSources(content, parsedUrl);
+  const filename = getRemoteInventoryFilename(parsedUrl, remoteContent.contentType);
+  const manifestSources = getStaticInventoryExtension(filename) === '.xlsx'
+    ? []
+    : parseRemoteInventoryManifestSources(remoteContent.content, parsedUrl);
   if (manifestSources.length) {
     const data = await importRemoteInventoryManifest(parsedUrl, manifestSources);
     if (options.persist && isStaticMode()) saveRemoteInventoryUrl(parsedUrl.href);
     return data;
   }
 
-  const filename = getRemoteInventoryFilename(parsedUrl);
   let data;
   try {
     data = await importRemoteInventoryContent({
-      content,
+      content: remoteContent.content,
       filename,
       sourceUrl: parsedUrl.href
     });
@@ -390,10 +393,10 @@ async function importRemoteInventoryManifest(manifestUrl, sources) {
     });
 
     try {
-      const content = await fetchRemoteInventoryText(source.url);
-      const filename = getRemoteInventoryFilename(parseRemoteInventoryUrl(source.url));
+      const remoteContent = await fetchRemoteInventoryContent(source.url);
+      const filename = getRemoteInventoryFilename(parseRemoteInventoryUrl(source.url), remoteContent.contentType);
       const data = await importRemoteInventoryContent({
-        content,
+        content: remoteContent.content,
         filename,
         sourceUrl: manifestUrl.href,
         sourceName: source.name,
@@ -467,11 +470,11 @@ async function importRemoteInventoryContent(source, options = {}) {
     return fetchJson('/api/imports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: source.filename, content: source.content })
+      body: JSON.stringify(await buildInventoryImportPayload(source.filename, source.content))
     });
   }
 
-  const rows = parseStaticInventory(source.content, getStaticInventoryExtension(source.filename), { fieldMap })
+  const rows = (await parseStaticInventory(source.content, getStaticInventoryExtension(source.filename), { fieldMap }))
     .map((row) => ({
       ...row,
       source: row.source || row.provider || row.supplier || source.sourceName || row.source
@@ -485,6 +488,17 @@ async function importRemoteInventoryContent(source, options = {}) {
       content: JSON.stringify(rows)
     })
   });
+}
+
+async function fetchRemoteInventoryContent(sourceUrl) {
+  const response = await fetch(sourceUrl, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`远程价格源读取失败：HTTP ${response.status}`);
+  const contentType = response.headers.get('content-type') || '';
+  const extension = getStaticInventoryExtension(getRemoteInventoryFilename(parseRemoteInventoryUrl(sourceUrl), contentType));
+  return {
+    contentType,
+    content: extension === '.xlsx' ? await response.arrayBuffer() : await response.text()
+  };
 }
 
 async function fetchRemoteInventoryText(sourceUrl) {
@@ -644,10 +658,10 @@ async function loadRemoteInventoryManifestSource(manifestUrl, source) {
   });
 
   try {
-    const content = await fetchRemoteInventoryText(source.url);
-    const filename = getRemoteInventoryFilename(parseRemoteInventoryUrl(source.url));
+    const remoteContent = await fetchRemoteInventoryContent(source.url);
+    const filename = getRemoteInventoryFilename(parseRemoteInventoryUrl(source.url), remoteContent.contentType);
     const data = await importRemoteInventoryContent({
-      content,
+      content: remoteContent.content,
       filename,
       sourceUrl: manifestUrl.href,
       sourceName: source.name,
@@ -1681,13 +1695,13 @@ function getStaticProviderStatus() {
   };
 }
 
-function importStaticInventoryFile(filename, content, options = {}) {
+async function importStaticInventoryFile(filename, content, options = {}) {
   const extension = getStaticInventoryExtension(filename);
   if (options.sourceUrl && options.replaceExisting !== false) {
     state.staticInventoryRows = state.staticInventoryRows.filter((row) => row.__remoteInventoryUrl !== options.sourceUrl);
   }
   const fieldMap = normalizeStaticFieldMap(options.fieldMap || {});
-  const rows = parseStaticInventory(content, extension, { fieldMap }).map((row) => ({
+  const rows = (await parseStaticInventory(content, extension, { fieldMap })).map((row) => ({
     ...row,
     source: row.source || row.provider || row.supplier || options.sourceName || row.source,
     __inventoryFile: filename,
@@ -1706,21 +1720,50 @@ function rebuildStaticImportNames() {
   state.staticImportNames = [...new Set(state.staticInventoryRows.map((row) => row.__inventoryFile).filter(Boolean))];
 }
 
-function getRemoteInventoryFilename(sourceUrl) {
+async function buildInventoryImportPayload(filename, content) {
+  const extension = getStaticInventoryExtension(filename);
+  if (extension === '.xlsx') {
+    return {
+      filename,
+      contentBase64: await arrayBufferToBase64(content)
+    };
+  }
+  return {
+    filename,
+    content: String(content || '')
+  };
+}
+
+function arrayBufferToBase64(content) {
+  const bytes = new Uint8Array(normalizeStaticArrayBuffer(content));
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function getRemoteInventoryFilename(sourceUrl, contentType = '') {
   const host = sourceUrl.hostname.replace(/[^a-zA-Z0-9.-]+/g, '-').replace(/^-+|-+$/g, '') || 'remote';
   const pathname = decodeURIComponent(sourceUrl.pathname || '');
-  const rawName = pathname.split('/').filter(Boolean).pop() || 'remote-hotel-prices.csv';
-  const cleanName = rawName.split(/[?#]/)[0] || 'remote-hotel-prices.csv';
-  const filename = hasSupportedStaticInventoryExtension(cleanName) ? cleanName : `${cleanName}.csv`;
+  const defaultExtension = isXlsxContentType(contentType) ? '.xlsx' : '.csv';
+  const rawName = pathname.split('/').filter(Boolean).pop() || `remote-hotel-prices${defaultExtension}`;
+  const cleanName = rawName.split(/[?#]/)[0] || `remote-hotel-prices${defaultExtension}`;
+  const filename = hasSupportedStaticInventoryExtension(cleanName) ? cleanName : `${cleanName}${defaultExtension}`;
   return `${host}-${filename}`;
 }
 
+function isXlsxContentType(contentType) {
+  return String(contentType || '').toLowerCase().includes('spreadsheetml.sheet');
+}
+
 function toJsonInventoryFilename(filename) {
-  return String(filename || 'remote-hotel-prices').replace(/\.(csv|jsonl|ndjson)$/i, '.json');
+  return String(filename || 'remote-hotel-prices').replace(/\.(csv|jsonl|ndjson|xlsx)$/i, '.json');
 }
 
 function hasSupportedStaticInventoryExtension(filename) {
-  return /\.(csv|json|jsonl|ndjson)$/i.test(filename);
+  return /\.(csv|json|jsonl|ndjson|xlsx)$/i.test(filename);
 }
 
 function parseRemoteInventoryUrl(sourceUrl) {
@@ -2025,7 +2068,7 @@ function searchStaticHotels(query) {
     hotels: page.hotels,
     notice: hasInventory
       ? `价格来自 ${state.staticImportNames.length} 个浏览器导入文件，已按同酒店合并并优先显示最低价。`
-      : 'GitHub Pages 静态版当前展示全国示例价格；可在左侧导入供应商 CSV/JSON/JSONL 后查询真实价格。',
+      : 'GitHub Pages 静态版当前展示全国示例价格；可在左侧导入供应商 CSV/JSON/JSONL/XLSX 后查询真实价格。',
     providers: getStaticProviderStatus()
   };
 }
@@ -2311,9 +2354,12 @@ function normalizeStaticQuery(query) {
   };
 }
 
-function parseStaticInventory(content, extension, options = {}) {
+async function parseStaticInventory(content, extension, options = {}) {
   const fieldMap = normalizeStaticFieldMap(options.fieldMap || {});
   const mapRows = (rows) => rows.map((row) => mapStaticInventoryRow(row, fieldMap));
+  if (extension === '.xlsx') {
+    return mapRows(await parseStaticXlsxInventory(content));
+  }
   if (extension === '.json') {
     const parsed = JSON.parse(content);
     return mapRows(flattenStaticInventoryDocument(parsed));
@@ -2330,10 +2376,251 @@ function parseStaticInventory(content, extension, options = {}) {
 
 function getStaticInventoryExtension(filename) {
   const lowered = filename.toLowerCase();
+  if (lowered.endsWith('.xlsx')) return '.xlsx';
   if (lowered.endsWith('.jsonl')) return '.jsonl';
   if (lowered.endsWith('.ndjson')) return '.ndjson';
   if (lowered.endsWith('.json')) return '.json';
   return '.csv';
+}
+
+async function parseStaticXlsxInventory(content) {
+  const entries = await extractStaticZipEntries(normalizeStaticArrayBuffer(content));
+  const decoder = new TextDecoder('utf-8');
+  const textEntries = new Map(entries.map((entry) => [
+    normalizeStaticZipPath(entry.name),
+    decoder.decode(entry.content)
+  ]));
+  const workbookXml = textEntries.get('xl/workbook.xml');
+  if (!workbookXml) throw new Error('Excel 文件缺少 xl/workbook.xml。');
+
+  const worksheetPath = findStaticXlsxWorksheetPath(workbookXml, textEntries);
+  const worksheetXml = textEntries.get(worksheetPath);
+  if (!worksheetXml) throw new Error(`Excel 文件缺少 ${worksheetPath}。`);
+
+  const sharedStrings = parseStaticXlsxSharedStrings(textEntries.get('xl/sharedStrings.xml') || '');
+  return staticXlsxRowsToObjects(parseStaticXlsxWorksheetRows(worksheetXml, sharedStrings));
+}
+
+function findStaticXlsxWorksheetPath(workbookXml, textEntries) {
+  const relationships = parseStaticXlsxWorkbookRelationships(textEntries.get('xl/_rels/workbook.xml.rels') || '');
+  for (const sheet of matchStaticXmlTags(workbookXml, 'sheet')) {
+    const attrs = parseStaticXmlAttributes(sheet.openingTag);
+    const relationship = relationships.get(attrs['r:id'] || attrs.id);
+    if (relationship) return relationship;
+  }
+  if (textEntries.has('xl/worksheets/sheet1.xml')) return 'xl/worksheets/sheet1.xml';
+  const worksheet = [...textEntries.keys()].find((name) => /^xl\/worksheets\/.+\.xml$/i.test(name));
+  if (worksheet) return worksheet;
+  throw new Error('Excel 文件没有可读取的工作表。');
+}
+
+function parseStaticXlsxWorkbookRelationships(xml) {
+  const relationships = new Map();
+  const pattern = /<Relationship\b([^>]*)\/?>/gi;
+  let match;
+  while ((match = pattern.exec(xml))) {
+    const attrs = parseStaticXmlAttributes(match[0]);
+    const type = String(attrs.Type || attrs.type || '').toLowerCase();
+    if (!type.includes('worksheet')) continue;
+    const id = attrs.Id || attrs.id;
+    const target = attrs.Target || attrs.target;
+    if (id && target) relationships.set(id, resolveStaticXlsxTarget('xl/workbook.xml', target));
+  }
+  return relationships;
+}
+
+function parseStaticXlsxSharedStrings(xml) {
+  if (!xml) return [];
+  return matchStaticXmlTags(xml, 'si').map((item) => readStaticXlsxTextRuns(item.content));
+}
+
+function parseStaticXlsxWorksheetRows(xml, sharedStrings) {
+  return matchStaticXmlTags(xml, 'row').map((row) => {
+    const values = [];
+    let nextColumnIndex = 0;
+    for (const cell of matchStaticXmlTags(row.content, 'c')) {
+      const attrs = parseStaticXmlAttributes(cell.openingTag);
+      const refColumnIndex = getStaticXlsxColumnIndex(attrs.r);
+      const columnIndex = Number.isInteger(refColumnIndex) ? refColumnIndex : nextColumnIndex;
+      values[columnIndex] = parseStaticXlsxCellValue(cell.content, attrs, sharedStrings);
+      nextColumnIndex = columnIndex + 1;
+    }
+    return values;
+  });
+}
+
+function parseStaticXlsxCellValue(content, attrs, sharedStrings) {
+  const type = String(attrs.t || '').trim();
+  if (type === 'inlineStr') return readStaticXlsxTextRuns(content);
+  const rawValue = readFirstStaticXmlTagText(content, 'v');
+  if (rawValue === '') return '';
+  if (type === 's') return sharedStrings[Number(rawValue)] ?? '';
+  if (type === 'b') return rawValue === '1' ? 'TRUE' : 'FALSE';
+  return rawValue;
+}
+
+function staticXlsxRowsToObjects(rows) {
+  const nonEmptyRows = rows.filter((row) => row.some((value) => String(value ?? '').trim() !== ''));
+  if (nonEmptyRows.length < 2) return [];
+  const headers = nonEmptyRows[0].map((header) => String(header ?? '').trim());
+  return nonEmptyRows.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      if (header) record[header] = row[index] ?? '';
+    });
+    return record;
+  });
+}
+
+async function extractStaticZipEntries(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  if (!isStaticZipBuffer(bytes)) throw new Error('Excel 文件不是有效的 XLSX/ZIP 格式。');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const directory = findStaticZipDirectory(bytes, view);
+  const entries = [];
+  let offset = directory.centralDirectoryOffset;
+
+  for (let index = 0; index < directory.entryCount; index += 1) {
+    assertStaticZipSignature(view, offset, 0x02014b50, 'central directory header');
+    const compressionMethod = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const uncompressedSize = view.getUint32(offset + 24, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+    const fileNameStart = offset + 46;
+    const fileNameEnd = fileNameStart + fileNameLength;
+    const name = new TextDecoder('utf-8').decode(bytes.subarray(fileNameStart, fileNameEnd));
+    offset = fileNameEnd + extraLength + commentLength;
+
+    if (!name || name.endsWith('/') || name.startsWith('__MACOSX/')) continue;
+    assertStaticZipSignature(view, localHeaderOffset, 0x04034b50, `local file header for ${name}`);
+    const localFileNameLength = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+    const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > bytes.length) throw new Error(`Excel 文件中的 ${name} 超出 ZIP 范围。`);
+    const content = await decompressStaticZipEntry(bytes.subarray(dataStart, dataEnd), compressionMethod, name);
+    if (content.length !== uncompressedSize) throw new Error(`Excel 文件中的 ${name} 解压大小异常。`);
+    entries.push({ name, content });
+  }
+
+  return entries;
+}
+
+function isStaticZipBuffer(bytes) {
+  return bytes?.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
+function findStaticZipDirectory(bytes, view) {
+  const minOffset = Math.max(0, bytes.length - 65_557);
+  for (let offset = bytes.length - 22; offset >= minOffset; offset -= 1) {
+    if (view.getUint32(offset, true) !== 0x06054b50) continue;
+    return {
+      entryCount: view.getUint16(offset + 10, true),
+      centralDirectoryOffset: view.getUint32(offset + 16, true)
+    };
+  }
+  throw new Error('Excel 文件缺少 ZIP 目录。');
+}
+
+function assertStaticZipSignature(view, offset, signature, label) {
+  if (offset < 0 || offset + 4 > view.byteLength || view.getUint32(offset, true) !== signature) {
+    throw new Error(`Excel 文件 ZIP ${label} 无效。`);
+  }
+}
+
+async function decompressStaticZipEntry(bytes, compressionMethod, name) {
+  if (compressionMethod === 0) return new Uint8Array(bytes);
+  if (compressionMethod !== 8) throw new Error(`Excel 文件中的 ${name} 使用了不支持的 ZIP 压缩方式。`);
+  if (!window.DecompressionStream) {
+    throw new Error('当前浏览器不支持直接解析压缩 Excel 文件，请使用 CSV/JSON 或 Node 版导入。');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function normalizeStaticArrayBuffer(content) {
+  if (content instanceof ArrayBuffer) return content;
+  if (ArrayBuffer.isView(content)) return content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength);
+  throw new Error('Excel 文件需要以二进制方式读取。');
+}
+
+function matchStaticXmlTags(xml, tagName) {
+  const pattern = new RegExp(`<${tagName}\\b[^>]*>[\\s\\S]*?<\\/${tagName}>|<${tagName}\\b[^>]*/>`, 'gi');
+  const matches = [];
+  let match;
+  while ((match = pattern.exec(xml))) {
+    const tag = match[0];
+    const openingTag = tag.slice(0, tag.indexOf('>') + 1);
+    const content = tag.endsWith('/>')
+      ? ''
+      : tag.slice(openingTag.length, tag.lastIndexOf(`</${tagName}>`));
+    matches.push({ openingTag, content });
+  }
+  return matches;
+}
+
+function readStaticXlsxTextRuns(xml) {
+  const values = [];
+  const pattern = /<t\b[^>]*>([\s\S]*?)<\/t>/gi;
+  let match;
+  while ((match = pattern.exec(xml))) {
+    values.push(decodeStaticXml(match[1]));
+  }
+  return values.join('');
+}
+
+function readFirstStaticXmlTagText(xml, tagName) {
+  const pattern = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i');
+  const match = xml.match(pattern);
+  return match ? decodeStaticXml(match[1]).trim() : '';
+}
+
+function parseStaticXmlAttributes(tag) {
+  const attributes = {};
+  const pattern = /([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g;
+  let match;
+  while ((match = pattern.exec(tag))) {
+    attributes[match[1]] = decodeStaticXml(match[3]);
+  }
+  return attributes;
+}
+
+function getStaticXlsxColumnIndex(cellReference) {
+  const match = String(cellReference || '').match(/^([A-Z]+)/i);
+  if (!match) return null;
+  return match[1].toUpperCase().split('').reduce((total, letter) =>
+    total * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+}
+
+function resolveStaticXlsxTarget(basePath, target) {
+  const rawTarget = String(target || '').replace(/\\/g, '/');
+  if (rawTarget.startsWith('/')) return normalizeStaticZipPath(rawTarget.slice(1));
+  const baseParts = basePath.split('/').slice(0, -1);
+  rawTarget.split('/').forEach((part) => {
+    if (!part || part === '.') return;
+    if (part === '..') baseParts.pop();
+    else baseParts.push(part);
+  });
+  return normalizeStaticZipPath(baseParts.join('/'));
+}
+
+function normalizeStaticZipPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function decodeStaticXml(value) {
+  return String(value || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 function flattenStaticInventoryDocument(parsed) {

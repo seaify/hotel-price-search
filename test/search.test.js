@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { gzipSync } from 'node:zlib';
+import { deflateRawSync, gzipSync } from 'node:zlib';
 import { buildDemoHotels, cityCatalog } from '../server/hotel-data.js';
 import { createHotelServer, searchHotels } from '../server/index.js';
 import { clearInventoryCache } from '../server/providers/local-inventory.js';
@@ -1065,6 +1065,57 @@ describe('hotel search data', () => {
     }
   });
 
+  it('loads XLSX supplier exports from local files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-xlsx-'));
+    const filePath = join(dir, 'prices.xlsx');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(filePath, buildXlsxWorkbook([
+      ['id', 'name', 'province', 'city', 'district', 'address', 'star', 'rating', 'price', 'source', 'checkIn', 'checkOut', 'available'],
+      ['xlsx-001', '青岛Excel供应商酒店', '山东', '青岛', '市南', '青岛市市南区海景路 1 号', '5', '4.8', '788', 'Excel供应商', '2026-06-01', '2026-12-31', 'true']
+    ]));
+
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    process.env.HOTEL_DATA_FILE = filePath;
+    clearInventoryCache();
+
+    try {
+      const result = await searchHotels({
+        city: '青岛',
+        keyword: 'Excel供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '青岛Excel供应商酒店');
+      assert.equal(result.hotels[0].price, 788);
+      assert.equal(result.hotels[0].providerName, 'Excel供应商');
+    } finally {
+      clearInventoryCache();
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('expands nested hotel rooms and rates from supplier JSON files', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-nested-'));
     const filePath = join(dir, 'nested.json');
@@ -1212,6 +1263,64 @@ describe('hotel search data', () => {
       assert.equal(result.total, 1);
       assert.equal(result.hotels[0].name, '广州上传导入酒店');
       assert.equal(result.hotels[0].price, 688);
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('imports an XLSX supplier file through the HTTP API and makes it searchable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-xlsx-upload-'));
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    process.env.HOTEL_IMPORT_DIR = dir;
+
+    const server = createHotelServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const workbook = buildXlsxWorkbook([
+        ['id', 'name', 'province', 'city', 'district', 'address', 'star', 'rating', 'price', 'source', 'checkIn', 'checkOut', 'available'],
+        ['upload-xlsx-001', '南京Excel上传酒店', '江苏', '南京', '玄武', '南京市玄武区中山路 1 号', '4', '4.7', '698', 'Excel上传供应商', '2026-06-01', '2026-12-31', 'true']
+      ]);
+      const importResponse = await fetch(`${baseUrl}/api/imports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: 'upload.xlsx', contentBase64: workbook.toString('base64') })
+      });
+      const imported = await importResponse.json();
+      assert.equal(importResponse.status, 201);
+      assert.equal(imported.imported.rowCount, 1);
+      assert.match(imported.imported.filename, /\.xlsx$/);
+
+      const searchResponse = await fetch(`${baseUrl}/api/search?city=%E5%8D%97%E4%BA%AC&keyword=Excel%E4%B8%8A%E4%BC%A0&checkIn=2026-06-06&checkOut=2026-06-07`);
+      const result = await searchResponse.json();
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '南京Excel上传酒店');
+      assert.equal(result.hotels[0].price, 698);
+      assert.equal(result.hotels[0].providerName, 'Excel上传供应商');
     } finally {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       if (previousFile === undefined) {
@@ -3277,6 +3386,118 @@ describe('hotel search data', () => {
     }
   });
 
+  it('loads a remote supplier XLSX URL as searchable real inventory', async () => {
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestUrl = process.env.HOTEL_DATA_MANIFEST_URL;
+    const previousManifestUrls = process.env.HOTEL_DATA_MANIFEST_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+    const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_URL;
+    delete process.env.HOTEL_DATA_MANIFEST_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    delete process.env.HOTEL_DATA_URL_HEADERS;
+    process.env.HOTEL_DATA_CACHE_SECONDS = '3600';
+    clearInventoryCache();
+
+    const workbook = buildXlsxWorkbook([
+      ['id', 'name', 'province', 'city', 'district', 'address', 'star', 'rating', 'price', 'source', 'checkIn', 'checkOut', 'available', 'bookingUrl'],
+      ['remote-xlsx-001', '西安远程Excel酒店', '陕西', '西安', '雁塔', '西安市雁塔区远程路 1 号', '5', '4.9', '899', '远程Excel供应商', '2026-06-01', '2026-12-31', 'true', 'https://example.com/remote-xlsx-001']
+    ]);
+    let requestCount = 0;
+    const supplierServer = createHttpServer((request, response) => {
+      requestCount += 1;
+      assert.ok(request.url.includes('signature=secret-value'));
+      response.writeHead(200, { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      response.end(workbook);
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+
+    process.env.HOTEL_DATA_URL = `http://127.0.0.1:${address.port}/export?signature=secret-value`;
+
+    try {
+      const result = await searchHotels({
+        city: '西安',
+        keyword: '远程Excel',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '西安远程Excel酒店');
+      assert.equal(result.hotels[0].price, 899);
+      assert.equal(result.hotels[0].providerName, '远程Excel供应商');
+      assert.equal(result.providers.localInventory.remoteInventory.okCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].rowCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].url, `http://127.0.0.1:${address.port}/export?signature=REDACTED`);
+      assert.equal(requestCount, 1);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousManifestUrl === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URL;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URL = previousManifestUrl;
+      }
+      if (previousManifestUrls === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URLS;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URLS = previousManifestUrls;
+      }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
+      }
+      if (previousDataUrlHeaders === undefined) {
+        delete process.env.HOTEL_DATA_URL_HEADERS;
+      } else {
+        process.env.HOTEL_DATA_URL_HEADERS = previousDataUrlHeaders;
+      }
+      if (previousCacheSeconds === undefined) {
+        delete process.env.HOTEL_DATA_CACHE_SECONDS;
+      } else {
+        process.env.HOTEL_DATA_CACHE_SECONDS = previousCacheSeconds;
+      }
+    }
+  });
+
   it('uses stale cached remote supplier inventory after transient failures', async () => {
     const previousFile = process.env.HOTEL_DATA_FILE;
     const previousFiles = process.env.HOTEL_DATA_FILES;
@@ -3885,3 +4106,145 @@ describe('hotel search data', () => {
     }
   });
 });
+
+function buildXlsxWorkbook(rows) {
+  const sharedStrings = [];
+  const sharedStringIndexes = new Map();
+  const sheetRows = rows.map((row, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    const cells = row.map((value, columnIndex) => {
+      const text = String(value ?? '');
+      const sharedStringIndex = getSharedStringIndex(text, sharedStrings, sharedStringIndexes);
+      return `<c r="${formatCellReference(columnIndex, rowNumber)}" t="s"><v>${sharedStringIndex}</v></c>`;
+    }).join('');
+    return `<row r="${rowNumber}">${cells}</row>`;
+  }).join('');
+
+  return buildZipArchive({
+    '[Content_Types].xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '<Default Extension="xml" ContentType="application/xml"/>',
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
+      '</Types>'
+    ].join(''),
+    '_rels/.rels': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>',
+      '</Relationships>'
+    ].join(''),
+    'xl/workbook.xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+      '</workbook>'
+    ].join(''),
+    'xl/_rels/workbook.xml.rels': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+      '</Relationships>'
+    ].join(''),
+    'xl/sharedStrings.xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${rows.flat().length}" uniqueCount="${sharedStrings.length}">`,
+      sharedStrings.map((value) => `<si><t>${escapeXml(value)}</t></si>`).join(''),
+      '</sst>'
+    ].join(''),
+    'xl/worksheets/sheet1.xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+      `<sheetData>${sheetRows}</sheetData>`,
+      '</worksheet>'
+    ].join('')
+  });
+}
+
+function buildZipArchive(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  Object.entries(entries).forEach(([name, content]) => {
+    const nameBuffer = Buffer.from(name, 'utf8');
+    const dataBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+    const compressedBuffer = deflateRawSync(dataBuffer);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(compressedBuffer.length, 18);
+    localHeader.writeUInt32LE(dataBuffer.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, compressedBuffer);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(compressedBuffer.length, 20);
+    centralHeader.writeUInt32LE(dataBuffer.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt32LE(0, 34);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+
+    offset += localHeader.length + nameBuffer.length + compressedBuffer.length;
+  });
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(Object.keys(entries).length, 8);
+  end.writeUInt16LE(Object.keys(entries).length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
+function getSharedStringIndex(value, sharedStrings, sharedStringIndexes) {
+  if (!sharedStringIndexes.has(value)) {
+    sharedStringIndexes.set(value, sharedStrings.length);
+    sharedStrings.push(value);
+  }
+  return sharedStringIndexes.get(value);
+}
+
+function formatCellReference(columnIndex, rowNumber) {
+  let index = columnIndex + 1;
+  let letters = '';
+  while (index > 0) {
+    const remainder = (index - 1) % 26;
+    letters = String.fromCharCode(65 + remainder) + letters;
+    index = Math.floor((index - 1) / 26);
+  }
+  return `${letters}${rowNumber}`;
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
