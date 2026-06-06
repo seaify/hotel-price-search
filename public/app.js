@@ -13,6 +13,7 @@ const state = {
 };
 
 const remoteInventoryStorageKey = 'hotelPriceSearch.remoteInventoryUrls';
+const defaultRemoteInventoryManifestPath = 'hotel-inventory.manifest.json';
 const maxSavedRemoteInventoryUrls = 10;
 
 const staticHotelBlueprints = [
@@ -117,6 +118,7 @@ async function init() {
   renderSavedRemoteSources();
   await loadCities();
   applyInitialQueryFromUrl();
+  await loadDefaultRemoteInventoryManifest();
   await loadSavedRemoteInventorySources();
   await loadProviderStatus();
   await runSearch();
@@ -487,6 +489,57 @@ async function fetchRemoteInventoryText(sourceUrl) {
   return response.text();
 }
 
+async function loadDefaultRemoteInventoryManifest() {
+  if (!isStaticMode()) return;
+  const manifestUrl = getDefaultRemoteInventoryManifestUrl();
+  if (!manifestUrl || state.savedRemoteInventoryUrls.includes(manifestUrl.href)) return;
+
+  let response;
+  try {
+    response = await fetch(manifestUrl.href, { cache: 'no-store' });
+  } catch {
+    return;
+  }
+
+  if (response.status === 404) return;
+  if (!response.ok) {
+    elements.importStatus.textContent = `默认供应商清单读取失败：HTTP ${response.status}`;
+    return;
+  }
+
+  let sources;
+  try {
+    sources = parseRemoteInventoryManifestSources(await response.text(), manifestUrl);
+  } catch {
+    elements.importStatus.textContent = '默认供应商清单解析失败';
+    return;
+  }
+  if (!sources.length) return;
+
+  elements.importStatus.textContent = `正在自动加载站点供应商清单（${sources.length} 个源）`;
+  try {
+    const data = await importRemoteInventoryManifest(manifestUrl, sources);
+    elements.importStatus.textContent = data.imported.failedCount
+      ? `已自动加载站点清单 ${data.imported.rowCount} 条远程价格，${data.imported.failedCount} 个源失败`
+      : `已自动加载站点清单 ${data.imported.rowCount} 条远程价格`;
+  } catch (error) {
+    elements.importStatus.textContent = error.message || '默认供应商清单自动加载失败';
+  }
+}
+
+function getDefaultRemoteInventoryManifestUrl() {
+  const configured = window.HOTEL_DEFAULT_INVENTORY_MANIFEST;
+  if (configured === false || configured === null) return null;
+  const manifestPath = typeof configured === 'string' && configured.trim()
+    ? configured.trim()
+    : defaultRemoteInventoryManifestPath;
+  try {
+    return parseRemoteInventoryUrl(manifestPath);
+  } catch {
+    return null;
+  }
+}
+
 async function loadSavedRemoteInventorySources() {
   if (!isStaticMode() || !state.savedRemoteInventoryUrls.length) return;
 
@@ -495,6 +548,7 @@ async function loadSavedRemoteInventorySources() {
   let failedCount = 0;
 
   for (const sourceUrl of state.savedRemoteInventoryUrls) {
+    if (hasRemoteInventoryLoadGroup(sourceUrl)) continue;
     try {
       const data = await importRemoteInventorySource(sourceUrl, { persist: false });
       loadedRows += Number(data.imported?.rowCount || 0);
@@ -650,7 +704,9 @@ function applyRemoteInventoryUrlsFromParams(params) {
   if (!isStaticMode()) return;
   const remoteUrls = [
     ...params.getAll('inventoryUrl'),
-    ...params.getAll('inventoryUrls').flatMap((value) => value.split(/[,\n;]/))
+    ...params.getAll('inventoryUrls').flatMap((value) => value.split(/[,\n;]/)),
+    ...params.getAll('inventoryManifestUrl'),
+    ...params.getAll('inventoryManifestUrls').flatMap((value) => value.split(/[,\n;]/))
   ].map((value) => value.trim()).filter(Boolean);
   if (!remoteUrls.length) return;
 
@@ -1250,6 +1306,15 @@ function renderSavedRemoteSources() {
   const moreText = state.savedRemoteInventoryUrls.length > labels.length ? ` 等 ${state.savedRemoteInventoryUrls.length} 个` : '';
   elements.remoteSourcesStatus.textContent = `已保存 ${labels.join('、')}${moreText}`;
   elements.clearRemoteSourcesButton.hidden = false;
+}
+
+function hasRemoteInventoryLoadGroup(sourceUrl) {
+  try {
+    const href = parseRemoteInventoryUrl(sourceUrl).href;
+    return state.remoteInventoryLoads.some((load) => load.groupUrl === href || load.url === href);
+  } catch {
+    return false;
+  }
 }
 
 function formatRemoteInventorySourceLabel(sourceUrl) {

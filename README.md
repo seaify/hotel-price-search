@@ -90,7 +90,7 @@ npm start
 }
 ```
 
-`headers` 只适用于 Node 后端读取远程源；GitHub Pages 静态版由浏览器直接请求远程源，不能附加私密鉴权头，适合使用允许跨域访问的公开或签名 URL。
+`headers` 只适用于 Node 后端读取远程源；GitHub Pages 静态版由浏览器直接请求远程源，不能附加私密鉴权头，适合使用允许跨域访问的公开或签名 URL。静态版会在启动时自动尝试读取同目录的 `hotel-inventory.manifest.json`，可以把允许跨域访问的全国供应商分片 URL 写进这个文件，重新运行 `npm run build:pages` 后部署到 GitHub Pages。
 
 如果供应商提供的是实时查价接口，而不是定时导出文件，也可以配置通用实时 API。系统会把目的地、日期、成人、房间、价格等查询参数传给供应商，并把对方返回的 CSV/JSON/JSONL 统一归一化到酒店结果里：
 
@@ -285,6 +285,13 @@ npm start
 
 也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL，并会在浏览器里保存远程源、下次打开自动重载；远程服务需要允许跨域访问。静态版接入远程清单后，页面会在“接入状态”里显示每个远程源的加载结果、行数和失败摘要。
 
+GitHub Pages 静态版默认会自动读取 `hotel-inventory.manifest.json`。把各供应商按省份、城市或渠道拆成多个 CSV/JSON/JSONL 分片后写入 `public/hotel-inventory.manifest.json`，再执行 `npm run build:pages`，上线页面打开时就会自动加载这些远程价格。也可以用 URL 参数临时接源：
+
+```text
+https://seaify.github.io/hotel-price-search/?inventoryManifestUrl=https%3A%2F%2Fexample.com%2Fhotel-suppliers.json
+https://seaify.github.io/hotel-price-search/?inventoryUrl=https%3A%2F%2Fexample.com%2Fshenzhen-prices.csv
+```
+
 如果有多家供应商远程导出，也可以把 URL 填成一个清单 JSON。每个供应商可配置自己的 `fieldMap`，用于把非标准字段映射到内部字段：
 
 ```json
@@ -347,3 +354,31 @@ npm run build:pages
 ```
 
 构建结果在 `docs/`，GitHub Pages 选择 `main` 分支的 `/docs` 目录即可。Pages 静态版没有 Node 后端，仍可使用全国示例价格库，也支持在浏览器内导入 CSV/JSON/JSONL 后查询，并可下载逐城市覆盖缺口表；需要服务器保存上传文件、读取 gzip 压缩包或接实时 API 时，请使用 `npm start` 的 Node 版本。
+
+如果要让 GitHub Pages 页面打开后自动加载真实供应商库存，把公开或签名的供应商导出 URL 写入 [public/hotel-inventory.manifest.json](public/hotel-inventory.manifest.json)，例如：
+
+```json
+{
+  "sources": [
+    {
+      "name": "ctrip-east",
+      "url": "https://example.com/hotel-prices/east-china.csv"
+    },
+    {
+      "name": "meituan-south",
+      "url": "https://example.com/hotel-prices/south-china.jsonl",
+      "fieldMap": {
+        "id": "hotel.channelId",
+        "masterHotelId": "hotel.standardId",
+        "name": "hotel.name",
+        "province": "hotel.province",
+        "city": "hotel.city",
+        "price": "rate.price",
+        "bookingUrl": "rate.url"
+      }
+    }
+  ]
+}
+```
+
+然后重新运行 `npm run build:pages` 并推送，构建后的 `docs/hotel-inventory.manifest.json` 会随站点一起发布。

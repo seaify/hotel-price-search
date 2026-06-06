@@ -1,0 +1,5 @@
+{
+  "name": "Hotel supplier inventory manifest",
+  "description": "Add public or signed CSV/JSON/JSONL supplier export URLs here. GitHub Pages will auto-load this file on startup.",
+  "sources": []
+}
