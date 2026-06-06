@@ -159,6 +159,66 @@ export async function probeSupplierApiCoverage(params, options = {}) {
   });
 }
 
+export async function getSupplierDestinationCoverage(params = {}, options = {}) {
+  const status = getSupplierApiStatus();
+  const sources = getSupplierApiSources();
+  const destination = resolveDestination(params.city);
+  const cities = getSupplierCoverageCities(destination, options);
+  const loads = await Promise.allSettled(sources.map(async (source) => {
+    const destinationMap = await getSupplierDestinationMap(source);
+    return buildSupplierDestinationSourceCoverage(source, destinationMap, cities);
+  }));
+  const sourceCoverage = loads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = loads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '实时供应商目的地编码表读取失败。');
+  const cityCoverage = cities.map(({ province, city }) => {
+    const coveredSources = sourceCoverage.filter((source) => source.coveredCitySet.has(city));
+    return {
+      province,
+      city,
+      covered: coveredSources.length > 0,
+      sourceCount: coveredSources.length,
+      sources: coveredSources.map((source) => source.sourceName),
+      codes: coveredSources.map((source) => ({
+        sourceName: source.sourceName,
+        cityId: source.cityCodes.get(city)?.cityId || '',
+        cityCode: source.cityCodes.get(city)?.cityCode || '',
+        destinationId: source.cityCodes.get(city)?.destinationId || '',
+        destinationCode: source.cityCodes.get(city)?.destinationCode || ''
+      }))
+    };
+  });
+  const coveredCities = cityCoverage.filter((item) => item.covered);
+  const totalProvinces = new Set(cities.map((city) => city.province)).size;
+
+  return {
+    configured: status.configured,
+    type: 'supplier-destination-map',
+    generatedAt: new Date().toISOString(),
+    query: {
+      destinationType: destination.type,
+      city: params.city || '',
+      label: destination.label
+    },
+    apiCount: status.apiCount,
+    sourceCount: sourceCoverage.length,
+    sourceErrors,
+    coveredCities: coveredCities.length,
+    totalCities: cities.length,
+    coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
+    coveredProvinces: new Set(coveredCities.map((item) => item.province)).size,
+    totalProvinces,
+    cityCoverage,
+    missingCities: cityCoverage
+      .filter((item) => !item.covered)
+      .map(({ province, city }) => ({ province, city })),
+    sourceCoverage: sourceCoverage.map(({ coveredCitySet, cityCodes, ...source }) => source)
+  };
+}
+
 async function readSupplierApiSourceLoads(source, params) {
   const cities = getSupplierFanoutCities(source, params);
   if (!cities.length) return readSupplierApiSource(source, params);
@@ -354,6 +414,46 @@ function buildSupplierCoverageSummary({
     sourceCoverage,
     provinceCoverage,
     catalogTotalCities: cityCatalog.length
+  };
+}
+
+function buildSupplierDestinationSourceCoverage(source, destinationMap, cities) {
+  const cityCodes = new Map();
+  const cityCoverage = cities.map(({ province, city }) => {
+    const destination = getSupplierDestinationValue(destinationMap, 'cities', city);
+    const covered = Object.keys(destination).length > 0;
+    const code = {
+      cityId: pickDestinationValue(destination, ['cityId', 'id']) || '',
+      cityCode: pickDestinationValue(destination, ['cityCode', 'code']) || '',
+      destinationId: pickDestinationValue(destination, ['destinationId', 'cityId', 'id', 'code']) || '',
+      destinationCode: pickDestinationValue(destination, ['destinationCode', 'cityCode', 'code', 'id']) || ''
+    };
+    if (covered) cityCodes.set(city, code);
+    return {
+      province,
+      city,
+      covered,
+      ...code
+    };
+  });
+  const coveredCities = cityCoverage.filter((item) => item.covered);
+  const totalProvinces = new Set(cities.map((city) => city.province)).size;
+  return {
+    sourceName: source.name,
+    configured: destinationMap.configured,
+    destinationMapFile: source.destinationMapFile || '',
+    destinationMapUrl: source.destinationMapUrl ? redactUrl(source.destinationMapUrl) : '',
+    coveredCities: coveredCities.length,
+    totalCities: cities.length,
+    coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
+    coveredProvinces: new Set(coveredCities.map((item) => item.province)).size,
+    totalProvinces,
+    missingCities: cityCoverage
+      .filter((item) => !item.covered)
+      .map(({ province, city }) => ({ province, city })),
+    cityCoverage,
+    coveredCitySet: new Set(coveredCities.map((item) => item.city)),
+    cityCodes
   };
 }
 

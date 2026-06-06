@@ -19,6 +19,7 @@ import {
   searchLocalInventory
 } from './providers/local-inventory.js';
 import {
+  getSupplierDestinationCoverage,
   getSupplierApiStatus,
   probeSupplierApiCoverage,
   searchSupplierApiInventory
@@ -68,6 +69,15 @@ export function createHotelServer() {
         const coverage = await probeSupplierApiCoverage(params, getSupplierCoverageOptions(url.searchParams));
         if (url.pathname.endsWith('.csv') || url.searchParams.get('format') === 'csv') {
           return sendCoverageCsv(response, coverage, 'hotel-supplier-coverage.csv');
+        }
+        return sendJson(response, coverage);
+      }
+
+      if (url.pathname === '/api/supplier-destinations' || url.pathname === '/api/supplier-destinations.csv') {
+        const params = normalizeSearchParams(Object.fromEntries(url.searchParams.entries()));
+        const coverage = await getSupplierDestinationCoverage(params, getSupplierCoverageOptions(url.searchParams));
+        if (url.pathname.endsWith('.csv') || url.searchParams.get('format') === 'csv') {
+          return sendDestinationCoverageCsv(response, coverage);
         }
         return sendJson(response, coverage);
       }
@@ -489,6 +499,28 @@ function sendCoverageCsv(response, coverage, filename = 'hotel-coverage.csv') {
   ];
   const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
   sendCsv(response, csv, filename);
+}
+
+function sendDestinationCoverageCsv(response, coverage) {
+  const rows = [
+    ['province', 'city', 'mapped', 'sourceCount', 'sources', 'codes'],
+    ...(coverage.cityCoverage || []).map((item) => [
+      item.province,
+      item.city,
+      item.covered ? 'yes' : 'no',
+      item.sourceCount || 0,
+      (item.sources || []).join(';'),
+      (item.codes || [])
+        .map((code) => [
+          code.sourceName,
+          code.cityId || code.cityCode || code.destinationId || code.destinationCode
+        ].filter(Boolean).join(':'))
+        .filter(Boolean)
+        .join(';')
+    ])
+  ];
+  const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+  sendCsv(response, csv, 'hotel-supplier-destinations.csv');
 }
 
 function sendCsv(response, csv, filename) {

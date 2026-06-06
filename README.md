@@ -164,6 +164,13 @@ npm start
 ]
 ```
 
+编码表接入后，可先检查它是否覆盖全国城市目录，不必真实调用查价接口：
+
+```bash
+curl 'http://localhost:5174/api/supplier-destinations?city=江苏省&cityLimit=20'
+curl -OJ 'http://localhost:5174/api/supplier-destinations.csv'
+```
+
 如果供应商只支持城市级查价，不支持全国或省级目的地，可以启用 `cityFanout`。查询全国或省份时系统会按城市拆成多次请求，再合并酒店结果；`cityFanoutConcurrency` 控制并发数，`cityFanoutLimit` 可限制一次扇出的城市数量。
 
 供应商如果需要先换 access token，可以在单个源里配置 `auth`。`clientIdEnv` / `clientSecretEnv` 会从服务器环境变量读取密钥，token 会按 `expires_in` 缓存，并自动注入 `Authorization: Bearer ...`：
@@ -283,6 +290,7 @@ npm start
 - 实时供应商 API 支持每源请求字段映射、目的地编码映射、城市级扇出、分页元数据和覆盖探测
 - `/api/status` 查看当前供应商接入状态
 - `/api/coverage` 查看真实库存全国覆盖率，包含逐城市覆盖、按供应商分组覆盖和缺口城市；可传 `checkIn` / `checkOut` 计算指定入住日期的可售覆盖；`/api/coverage?format=csv` 或 `/api/coverage.csv` 可下载逐城市覆盖/缺口清单，CSV 会标出覆盖该城市的供应商来源
+- `/api/supplier-destinations` 检查实时供应商目的地编码表覆盖率；可传 `city`、`cityLimit`，`/api/supplier-destinations.csv` 可下载逐城市编码覆盖表
 - `/api/supplier-coverage` 对已配置的实时供应商 API 做按城市可售探测；可传 `city`、`checkIn` / `checkOut`、`probeLimit`、`concurrency`、`cityLimit`，`/api/supplier-coverage.csv` 可下载实时供应商覆盖缺口表
 - `/api/imports` 查看或上传供应商文件
 

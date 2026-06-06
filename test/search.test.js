@@ -2246,6 +2246,94 @@ describe('hotel search data', () => {
     }
   });
 
+  it('reports supplier destination map coverage through the HTTP API', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-supplier-destination-coverage-'));
+    const destinationMapFile = join(dir, 'supplier-destinations.json');
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = join(dir, 'imports');
+    clearInventoryCache();
+    await writeFile(destinationMapFile, JSON.stringify([
+      { province: '江苏', city: '南京', cityId: '320100', cityCode: 'NKG' },
+      { province: '江苏', city: '无锡', cityId: '320200', cityCode: 'WUX' }
+    ]));
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '编码覆盖供应商',
+      url: 'http://127.0.0.1:9/not-called',
+      method: 'GET',
+      destinationMapFile,
+      requestMap: {
+        cityId: 'cityId'
+      }
+    });
+
+    const server = createHotelServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const coverageResponse = await fetch(`${baseUrl}/api/supplier-destinations?city=江苏省&cityLimit=3`);
+      const coverage = await coverageResponse.json();
+      assert.equal(coverageResponse.status, 200);
+      assert.equal(coverage.configured, true);
+      assert.equal(coverage.type, 'supplier-destination-map');
+      assert.equal(coverage.query.destinationType, 'province');
+      assert.equal(coverage.query.label, '江苏');
+      assert.equal(coverage.totalCities, 3);
+      assert.equal(coverage.coveredCities, 2);
+      assert.equal(coverage.sourceCount, 1);
+      assert.equal(coverage.sourceCoverage[0].sourceName, '编码覆盖供应商');
+      assert.equal(coverage.sourceCoverage[0].coveredCities, 2);
+      assert.equal(coverage.sourceCoverage[0].totalCities, 3);
+      assert.equal(coverage.sourceCoverage[0].cityCoverage.find((item) => item.city === '南京').cityId, '320100');
+      assert.ok(!('coveredCitySet' in coverage.sourceCoverage[0]));
+      assert.ok(!('cityCodes' in coverage.sourceCoverage[0]));
+      assert.ok(coverage.cityCoverage.some((item) => item.city === '南京' && item.covered && item.sources.includes('编码覆盖供应商')));
+      assert.ok(coverage.cityCoverage.some((item) => item.city === '徐州' && !item.covered));
+      assert.ok(coverage.missingCities.some((item) => item.province === '江苏' && item.city === '徐州'));
+
+      const csvResponse = await fetch(`${baseUrl}/api/supplier-destinations.csv?city=江苏省&cityLimit=3`);
+      const csv = await csvResponse.text();
+      assert.equal(csvResponse.status, 200);
+      assert.match(csvResponse.headers.get('content-type'), /text\/csv/);
+      assert.match(csvResponse.headers.get('content-disposition'), /hotel-supplier-destinations\.csv/);
+      assert.match(csv, /province,city,mapped,sourceCount,sources,codes/);
+      assert.match(csv, /江苏,南京,yes,1,编码覆盖供应商,编码覆盖供应商:320100/);
+      assert.match(csv, /江苏,徐州,no,0,,/);
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      clearInventoryCache();
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('supports per-source live supplier API config with mixed methods and headers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-config-'));
     const previousFile = process.env.HOTEL_DATA_FILE;
