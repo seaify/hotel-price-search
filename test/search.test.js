@@ -1300,26 +1300,30 @@ describe('hotel search data', () => {
     delete process.env.HOTEL_DATA_MANIFEST_URL;
     delete process.env.HOTEL_DATA_MANIFEST_URLS;
     delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    delete process.env.HOTEL_SUPPLIER_API_URL;
     delete process.env.HOTEL_SUPPLIER_API_URLS;
     delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+    delete process.env.HOTEL_SUPPLIER_API_NAME;
     delete process.env.HOTEL_SUPPLIER_API_NAMES;
+    delete process.env.HOTEL_SUPPLIER_API_METHOD;
     delete process.env.HOTEL_SUPPLIER_API_HEADERS;
     delete process.env.AMADEUS_CLIENT_ID;
     delete process.env.AMADEUS_CLIENT_SECRET;
     process.env.HOTEL_IMPORT_DIR = dir;
-    process.env.HOTEL_SUPPLIER_API_NAME = '分页实时供应商';
-    process.env.HOTEL_SUPPLIER_API_METHOD = 'GET';
     clearInventoryCache();
 
     const supplierServer = createHttpServer((request, response) => {
       const url = new URL(request.url, `http://${request.headers.host}`);
-      const limit = Number(url.searchParams.get('limit') || 2);
-      const offset = Number(url.searchParams.get('offset') || 0);
+      const pageNo = Number(url.searchParams.get('pageNo') || 1);
+      const limit = Number(url.searchParams.get('pageSize') || 2);
+      const offset = (pageNo - 1) * limit;
       requests.push({
         city: url.searchParams.get('city'),
         destinationType: url.searchParams.get('destinationType'),
         limit: url.searchParams.get('limit'),
-        offset: url.searchParams.get('offset')
+        offset: url.searchParams.get('offset'),
+        pageNo: url.searchParams.get('pageNo'),
+        pageSize: url.searchParams.get('pageSize')
       });
       response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({
@@ -1361,7 +1365,16 @@ describe('hotel search data', () => {
     });
     await new Promise((resolve) => supplierServer.listen(0, resolve));
     const address = supplierServer.address();
-    process.env.HOTEL_SUPPLIER_API_URL = `http://127.0.0.1:${address.port}/paged-prices`;
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '分页实时供应商',
+      url: `http://127.0.0.1:${address.port}/paged-prices`,
+      method: 'GET',
+      requestMap: {
+        destinationType: 'destinationType',
+        pageNo: 'page',
+        pageSize: 'pageSize'
+      }
+    });
 
     try {
       const result = await searchHotels({
@@ -1392,8 +1405,10 @@ describe('hotel search data', () => {
       assert.equal(requests.length, 1);
       assert.equal(requests[0].city, null);
       assert.equal(requests[0].destinationType, 'nationwide');
-      assert.equal(requests[0].limit, '2');
-      assert.equal(requests[0].offset, '2');
+      assert.equal(requests[0].limit, null);
+      assert.equal(requests[0].offset, null);
+      assert.equal(requests[0].pageNo, '2');
+      assert.equal(requests[0].pageSize, '2');
     } finally {
       clearInventoryCache();
       await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
@@ -1711,6 +1726,7 @@ describe('hotel search data', () => {
         cityName: url.searchParams.get('cityName'),
         arrivalDate: url.searchParams.get('arrivalDate'),
         departureDate: url.searchParams.get('departureDate'),
+        pageNo: url.searchParams.get('pageNo'),
         pageSize: url.searchParams.get('pageSize'),
         start: url.searchParams.get('start'),
         locale: url.searchParams.get('locale'),
@@ -1755,7 +1771,8 @@ describe('hotel search data', () => {
           cityName: 'city',
           arrivalDate: 'checkIn',
           departureDate: 'checkOut',
-          pageSize: 'limit',
+          pageNo: 'page',
+          pageSize: 'pageSize',
           start: 'offset'
         }
       },
@@ -1772,7 +1789,8 @@ describe('hotel search data', () => {
           'stay.arrival': 'checkIn',
           'stay.departure': 'checkOut',
           'occupancy.adultCount': 'adults',
-          'pagination.pageSize': 'limit',
+          'pagination.pageNo': 'page',
+          'pagination.pageSize': 'pageSize',
           'pagination.offset': 'offset'
         }
       }
@@ -1811,6 +1829,7 @@ describe('hotel search data', () => {
       assert.equal(getRequest.cityName, '武汉');
       assert.equal(getRequest.arrivalDate, '2026-06-06');
       assert.equal(getRequest.departureDate, '2026-06-07');
+      assert.equal(getRequest.pageNo, '1');
       assert.equal(getRequest.pageSize, '24');
       assert.equal(getRequest.start, '0');
       assert.equal(getRequest.locale, 'zh-CN');
@@ -1824,6 +1843,7 @@ describe('hotel search data', () => {
       assert.equal(postRequest.body.stay.arrival, '2026-06-06');
       assert.equal(postRequest.body.stay.departure, '2026-06-07');
       assert.equal(postRequest.body.occupancy.adultCount, 2);
+      assert.equal(postRequest.body.pagination.pageNo, 1);
       assert.equal(postRequest.body.pagination.pageSize, 24);
       assert.equal(postRequest.body.pagination.offset, 0);
     } finally {

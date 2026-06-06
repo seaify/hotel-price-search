@@ -207,7 +207,8 @@ function buildSupplierApiRequest(source, params) {
 }
 
 function buildSupplierQuery(params, source = {}) {
-  const baseQuery = {
+  const pagination = buildSupplierPaginationQuery(params);
+  const defaultQuery = {
     city: params.city || '',
     destinationType: params.destinationType || '',
     keyword: params.keyword || '',
@@ -222,10 +223,15 @@ function buildSupplierQuery(params, source = {}) {
     limit: params.limit,
     offset: params.offset
   };
+  const baseQuery = {
+    ...defaultQuery,
+    page: pagination.page,
+    pageSize: pagination.pageSize
+  };
   const requestMap = source.requestMap || {};
   const requestDefaults = cloneRequestDefaults(source.requestDefaults || {});
   if (!Object.keys(requestMap).length) {
-    return { ...baseQuery, ...requestDefaults };
+    return { ...defaultQuery, ...requestDefaults };
   }
 
   const mappedQuery = requestDefaults;
@@ -234,6 +240,20 @@ function buildSupplierQuery(params, source = {}) {
     if (hasMappedValue(value)) setPathValue(mappedQuery, targetPath, value);
   });
   return mappedQuery;
+}
+
+function buildSupplierPaginationQuery(params) {
+  const limit = Number(params.limit);
+  const offset = Number(params.offset);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return { page: '', pageSize: '' };
+  }
+  const safeLimit = Math.round(limit);
+  const safeOffset = Number.isFinite(offset) && offset > 0 ? Math.round(offset) : 0;
+  return {
+    page: Math.floor(safeOffset / safeLimit) + 1,
+    pageSize: safeLimit
+  };
 }
 
 function appendSearchParams(url, query, prefix = '') {
