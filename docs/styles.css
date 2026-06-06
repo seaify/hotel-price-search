@@ -333,6 +333,17 @@ select:focus {
   font-weight: 800;
 }
 
+.import-panel .secondary-import-action {
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--surface-strong);
+}
+
+.import-panel .secondary-import-action:not(:disabled):hover {
+  border-color: rgba(11, 122, 117, 0.34);
+  color: var(--teal);
+}
+
 .import-panel button:disabled {
   cursor: not-allowed;
   border-color: var(--line);

@@ -83,6 +83,7 @@ const elements = {
   providerStatus: document.querySelector('#providerStatus'),
   inventoryFileInput: document.querySelector('#inventoryFileInput'),
   importButton: document.querySelector('#importButton'),
+  coverageDownloadButton: document.querySelector('#coverageDownloadButton'),
   importStatus: document.querySelector('#importStatus'),
   resultMeta: document.querySelector('#resultMeta'),
   resultTitle: document.querySelector('#resultTitle'),
@@ -164,6 +165,7 @@ function bindEvents() {
   });
 
   elements.importButton.addEventListener('click', importInventoryFile);
+  elements.coverageDownloadButton.addEventListener('click', downloadCoverageReport);
 }
 
 async function loadCities() {
@@ -225,6 +227,32 @@ async function importInventoryFile() {
   } finally {
     elements.importButton.disabled = true;
   }
+}
+
+async function downloadCoverageReport() {
+  if (elements.coverageDownloadButton.disabled) return;
+  elements.coverageDownloadButton.disabled = true;
+
+  try {
+    if (!isStaticMode()) {
+      const response = await fetch('/api/coverage.csv');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const csv = await response.text();
+      downloadTextFile('hotel-coverage.csv', csv, 'text/csv;charset=utf-8');
+    } else {
+      const coverage = summarizeStaticInventoryCoverage();
+      downloadTextFile('hotel-coverage.csv', buildCoverageCsv(coverage), 'text/csv;charset=utf-8');
+    }
+    elements.importStatus.textContent = '已下载覆盖缺口表';
+  } catch {
+    elements.importStatus.textContent = '覆盖缺口表下载失败';
+  } finally {
+    elements.coverageDownloadButton.disabled = !hasCoverageSource();
+  }
+}
+
+function hasCoverageSource() {
+  return isStaticMode() ? state.staticInventoryRows.length > 0 : true;
 }
 
 async function runSearch(options = {}) {
@@ -469,6 +497,7 @@ function renderProviderStatus(providers) {
       </div>
     `).join('')}
   `;
+  elements.coverageDownloadButton.disabled = !localReady;
   elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : apiReady ? '实时 API 已配置' : '全国示例价格库';
 }
 
@@ -505,20 +534,42 @@ function summarizeStaticInventoryCoverage() {
   const normalized = state.staticInventoryRows
     .map((row, index) => normalizeStaticHotel(row, index, 1))
     .filter((hotel) => hotel.available && hotel.city);
+  const mergedHotels = mergeStaticRates(normalized);
   const coveredCitySet = new Set(normalized.map((hotel) => hotel.city));
   const cities = getStaticCities();
   const coveredCities = cities.filter((city) => coveredCitySet.has(city.city));
   const provinceSet = new Set(cities.map((city) => city.province));
+  const rowCountByCity = countStaticBy(normalized.map((hotel) => hotel.city));
+  const hotelCountByCity = countStaticBy(mergedHotels.map((hotel) => hotel.city));
+  const cityCoverage = cities.map(({ province, city }) => ({
+    province,
+    city,
+    covered: coveredCitySet.has(city),
+    rowCount: rowCountByCity.get(city) || 0,
+    hotelCount: hotelCountByCity.get(city) || 0
+  }));
 
   return {
     rowCount: state.staticInventoryRows.length,
-    hotelCount: mergeStaticRates(normalized).length,
+    hotelCount: mergedHotels.length,
     coveredCities: coveredCities.length,
     totalCities: cities.length,
     coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
     coveredProvinces: new Set(coveredCities.map((city) => city.province)).size,
-    totalProvinces: provinceSet.size
+    totalProvinces: provinceSet.size,
+    cityCoverage,
+    missingCities: cityCoverage
+      .filter((item) => !item.covered)
+      .map(({ province, city }) => ({ province, city }))
   };
+}
+
+function countStaticBy(values) {
+  const counts = new Map();
+  values.filter(Boolean).forEach((value) => {
+    counts.set(value, (counts.get(value) || 0) + 1);
+  });
+  return counts;
 }
 
 function getStaticProviderStatus() {
@@ -1090,6 +1141,37 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function buildCoverageCsv(coverage) {
+  const rows = [
+    ['province', 'city', 'covered', 'hotelCount', 'rowCount'],
+    ...(coverage.cityCoverage || []).map((item) => [
+      item.province,
+      item.city,
+      item.covered ? 'yes' : 'no',
+      item.hotelCount || 0,
+      item.rowCount || 0
+    ])
+  ];
+  return rows.map((row) => row.map(escapeCsv).join(',')).join('\n');
+}
+
+function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content.startsWith('\uFEFF') ? content : `\uFEFF${content}\n`], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapeCsv(value) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function escapeHtml(value) {

@@ -100,4 +100,4 @@ npm test
 npm run build:pages
 ```
 
-构建结果在 `docs/`，GitHub Pages 选择 `main` 分支的 `/docs` 目录即可。Pages 静态版没有 Node 后端，仍可使用全国示例价格库，也支持在浏览器内导入 CSV/JSON/JSONL 后查询；需要服务器保存上传文件、读取 gzip 压缩包或接实时 API 时，请使用 `npm start` 的 Node 版本。
+构建结果在 `docs/`，GitHub Pages 选择 `main` 分支的 `/docs` 目录即可。Pages 静态版没有 Node 后端，仍可使用全国示例价格库，也支持在浏览器内导入 CSV/JSON/JSONL 后查询，并可下载逐城市覆盖缺口表；需要服务器保存上传文件、读取 gzip 压缩包或接实时 API 时，请使用 `npm start` 的 Node 版本。
