@@ -15,6 +15,8 @@ export async function auditInventoryCoverage(options = {}) {
     getNonNegativeInteger(options.minHotelsPerCity, 0)
   );
   const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 0);
+  const minPricedHotelsPerCity = getNonNegativeInteger(options.minPricedHotelsPerCity, 0);
+  const minPricedRowsPerCity = getNonNegativeInteger(options.minPricedRowsPerCity, 0);
   const maxPriceAgeHours = getNonNegativeNumber(options.maxPriceAgeHours, 0);
   const referenceTime = normalizeTimestamp(options.referenceTime || options.now || new Date().toISOString());
   const freshnessCutoff = maxPriceAgeHours && referenceTime
@@ -49,13 +51,19 @@ export async function auditInventoryCoverage(options = {}) {
         city: stat.city,
         rowCount: 0,
         hotelCount: 0,
+        pricedRowCount: 0,
+        pricedHotelCount: 0,
+        minPrice: 0,
         updatedAt: '',
         sources: new Set()
       };
       existing.rowCount += stat.rowCount;
       existing.hotelCount += stat.hotelCount;
+      existing.pricedRowCount += stat.pricedRowCount;
+      existing.pricedHotelCount += stat.pricedHotelCount;
+      existing.minPrice = minPositivePrice(existing.minPrice, stat.minPrice);
       existing.updatedAt = maxTimestamp(existing.updatedAt, stat.updatedAt);
-      if (stat.rowCount > 0 || stat.hotelCount > 0) existing.sources.add(sourceName);
+      if (stat.rowCount > 0 || stat.hotelCount > 0 || stat.pricedRowCount > 0 || stat.pricedHotelCount > 0) existing.sources.add(sourceName);
       cityStatsByCity.set(stat.city, existing);
     });
     if (!coverage.hasScope) {
@@ -76,6 +84,9 @@ export async function auditInventoryCoverage(options = {}) {
       cityStatsCount: coverage.cityStats.length,
       rowCount: effectiveStats.reduce((sum, stat) => sum + stat.rowCount, 0),
       hotelCount: effectiveStats.reduce((sum, stat) => sum + stat.hotelCount, 0),
+      pricedRowCount: effectiveStats.reduce((sum, stat) => sum + stat.pricedRowCount, 0),
+      pricedHotelCount: effectiveStats.reduce((sum, stat) => sum + stat.pricedHotelCount, 0),
+      minPrice: effectiveStats.reduce((minimum, stat) => minPositivePrice(minimum, stat.minPrice), 0),
       unknownDestinations: coverage.unknownDestinations,
       hasScope: coverage.hasScope
     });
@@ -110,6 +121,25 @@ export async function auditInventoryCoverage(options = {}) {
       })
       .filter((item) => item.hotelCount < minHotelsPerCity || item.rowCount < minRowsPerCity)
     : [];
+  const citiesWithPricedHotels = cityCatalog
+    .filter((item) => Number(cityStatsByCity.get(item.city)?.pricedHotelCount || 0) > 0)
+    .map(({ province, city }) => ({ province, city }));
+  const citiesBelowPriceMinimums = minPricedHotelsPerCity || minPricedRowsPerCity
+    ? cityCatalog
+      .map(({ province, city }) => {
+        const stats = cityStatsByCity.get(city) || {};
+        return {
+          province,
+          city,
+          pricedRowCount: Number(stats.pricedRowCount || 0),
+          pricedHotelCount: Number(stats.pricedHotelCount || 0),
+          minPricedRowCount: minPricedRowsPerCity,
+          minPricedHotelCount: minPricedHotelsPerCity,
+          minPrice: Number(stats.minPrice || 0)
+        };
+      })
+      .filter((item) => item.pricedHotelCount < minPricedHotelsPerCity || item.pricedRowCount < minPricedRowsPerCity)
+    : [];
   const citiesWithFreshPrices = freshnessCutoff
     ? cityCatalog
       .filter((item) => {
@@ -136,6 +166,12 @@ export async function auditInventoryCoverage(options = {}) {
   const effectiveHotelCount = dateFiltered
     ? [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.hotelCount || 0), 0)
     : sumSourceNumber(sources, 'hotelCount');
+  const effectivePricedRowCount = dateFiltered
+    ? [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.pricedRowCount || 0), 0)
+    : sumSourceNumber(sources, 'pricedRowCount') || [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.pricedRowCount || 0), 0);
+  const effectivePricedHotelCount = dateFiltered
+    ? [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.pricedHotelCount || 0), 0)
+    : sumSourceNumber(sources, 'pricedHotelCount') || [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.pricedHotelCount || 0), 0);
   const summary = {
     manifestPath,
     sourceCount: sources.length,
@@ -143,6 +179,8 @@ export async function auditInventoryCoverage(options = {}) {
     unscopedSourceCount: unscopedSources.length,
     rowCount: effectiveRowCount,
     hotelCount: effectiveHotelCount,
+    pricedRowCount: effectivePricedRowCount,
+    pricedHotelCount: effectivePricedHotelCount,
     coveredCities: coveredCities.length,
     totalCities: cityCatalog.length,
     coverageRatio: cityCatalog.length ? Number((coveredCities.length / cityCatalog.length).toFixed(4)) : 0,
@@ -150,20 +188,24 @@ export async function auditInventoryCoverage(options = {}) {
     totalProvinces: provinceSet.size,
     minHotelsPerCity,
     minRowsPerCity,
+    minPricedHotelsPerCity,
+    minPricedRowsPerCity,
     maxPriceAgeHours,
     freshnessCutoff,
     citiesWithHotelStats: citiesWithHotelStats.length,
+    citiesWithPricedHotels: citiesWithPricedHotels.length,
     citiesWithFreshPrices: citiesWithFreshPrices.length,
     totalCitiesWithRequiredHotelStats: options.requireCityHotels ? cityCatalog.length : 0,
     citiesWithoutHotelStats,
     citiesBelowMinimums,
+    citiesBelowPriceMinimums,
     citiesWithStalePrices,
     missingCities,
     unscopedSources,
     unknownDestinations: [...unknownDestinations].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     sourceCoverage: sourceCoverage.sort((a, b) => b.cityCount - a.cityCount || a.name.localeCompare(b.name, 'zh-CN')),
     query,
-    passed: basePassed && citiesWithoutHotelStats.length === 0 && citiesBelowMinimums.length === 0 && citiesWithStalePrices.length === 0
+    passed: basePassed && citiesWithoutHotelStats.length === 0 && citiesBelowMinimums.length === 0 && citiesBelowPriceMinimums.length === 0 && citiesWithStalePrices.length === 0
   };
 
   if (options.missingCsvPath) {
@@ -275,6 +317,9 @@ function normalizeCityStat(value) {
     city: city.city,
     rowCount: Number(value.rowCount ?? value.rows ?? value.rateCount ?? value.priceCount ?? 0),
     hotelCount: Number(value.hotelCount ?? value.hotels ?? 0),
+    pricedRowCount: Number(value.pricedRowCount ?? value.pricedRows ?? value.rowsWithPrice ?? value.priceRows ?? value.pricedRateCount ?? 0),
+    pricedHotelCount: Number(value.pricedHotelCount ?? value.pricedHotels ?? value.hotelsWithPrice ?? value.priceHotelCount ?? 0),
+    minPrice: Number(value.minPrice ?? value.lowestPrice ?? 0) || 0,
     updatedAt: normalizeTimestamp(value.updatedAt || value.fetchedAt || value.syncedAt || value.priceUpdatedAt || value.rateUpdatedAt || ''),
     dateStats: normalizeDateStats(value.dateStats || value.availabilityStats || value.stayStats || [])
   };
@@ -298,6 +343,9 @@ function normalizeDateStats(rawStats) {
         checkOut: normalizeDate(value.checkOut || value.endDate || value.availableTo || ''),
         rowCount: Number(value.rowCount ?? value.rows ?? value.rateCount ?? value.priceCount ?? 0),
         hotelCount: Number(value.hotelCount ?? value.hotels ?? 0),
+        pricedRowCount: Number(value.pricedRowCount ?? value.pricedRows ?? value.rowsWithPrice ?? value.priceRows ?? value.pricedRateCount ?? 0),
+        pricedHotelCount: Number(value.pricedHotelCount ?? value.pricedHotels ?? value.hotelsWithPrice ?? value.priceHotelCount ?? 0),
+        minPrice: Number(value.minPrice ?? value.lowestPrice ?? 0) || 0,
         updatedAt: normalizeTimestamp(value.updatedAt || value.fetchedAt || value.syncedAt || value.priceUpdatedAt || value.rateUpdatedAt || '')
       };
     })
@@ -308,12 +356,18 @@ function getCityStatCountsForQuery(stat, query) {
   if (!query) return {
     rowCount: stat.rowCount,
     hotelCount: stat.hotelCount,
+    pricedRowCount: stat.pricedRowCount,
+    pricedHotelCount: stat.pricedHotelCount,
+    minPrice: stat.minPrice,
     updatedAt: stat.updatedAt
   };
   const matchingDateStats = (stat.dateStats || []).filter((dateStat) => dateStatCoversStay(dateStat, query));
   return {
     rowCount: matchingDateStats.reduce((sum, dateStat) => sum + Number(dateStat.rowCount || 0), 0),
     hotelCount: matchingDateStats.reduce((sum, dateStat) => sum + Number(dateStat.hotelCount || 0), 0),
+    pricedRowCount: matchingDateStats.reduce((sum, dateStat) => sum + Number(dateStat.pricedRowCount || 0), 0),
+    pricedHotelCount: matchingDateStats.reduce((sum, dateStat) => sum + Number(dateStat.pricedHotelCount || 0), 0),
+    minPrice: matchingDateStats.reduce((minimum, dateStat) => minPositivePrice(minimum, dateStat.minPrice), 0),
     updatedAt: matchingDateStats.reduce((latest, dateStat) => maxTimestamp(latest, dateStat.updatedAt), '') || stat.updatedAt
   };
 }
@@ -400,6 +454,13 @@ function maxTimestamp(current, next) {
   return next > current ? next : current;
 }
 
+function minPositivePrice(current, next) {
+  const price = Number(next || 0);
+  if (!Number.isFinite(price) || price <= 0) return current || 0;
+  if (!current) return price;
+  return price < current ? price : current;
+}
+
 function getSourceName(source, index) {
   return String(source.name || source.provider || source.supplier || `供应商源${index + 1}`);
 }
@@ -453,6 +514,9 @@ function formatAuditText(summary) {
   if (summary.citiesBelowMinimums.length) {
     lines.push(`Cities below minimums: ${summary.citiesBelowMinimums.slice(0, 20).map((item) => `${item.province}/${item.city} hotels ${item.hotelCount}/${item.minHotelCount}, rows ${item.rowCount}/${item.minRowCount}`).join(', ')}${summary.citiesBelowMinimums.length > 20 ? ` ... +${summary.citiesBelowMinimums.length - 20}` : ''}`);
   }
+  if (summary.citiesBelowPriceMinimums.length) {
+    lines.push(`Cities below price minimums: ${summary.citiesBelowPriceMinimums.slice(0, 20).map((item) => `${item.province}/${item.city} priced hotels ${item.pricedHotelCount}/${item.minPricedHotelCount}, priced rows ${item.pricedRowCount}/${item.minPricedRowCount}`).join(', ')}${summary.citiesBelowPriceMinimums.length > 20 ? ` ... +${summary.citiesBelowPriceMinimums.length - 20}` : ''}`);
+  }
   if (summary.citiesWithStalePrices.length) {
     lines.push(`Cities with stale prices: ${summary.citiesWithStalePrices.slice(0, 20).map((item) => `${item.province}/${item.city} updated ${item.updatedAt || 'missing'}`).join(', ')}${summary.citiesWithStalePrices.length > 20 ? ` ... +${summary.citiesWithStalePrices.length - 20}` : ''}`);
   }
@@ -477,6 +541,8 @@ function parseArgs(argv) {
     else if (arg === '--require-city-hotels') options.requireCityHotels = true;
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
     else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
+    else if (arg === '--min-priced-hotels-per-city') options.minPricedHotelsPerCity = argv[++index];
+    else if (arg === '--min-priced-rows-per-city') options.minPricedRowsPerCity = argv[++index];
     else if (arg === '--max-price-age-hours') options.maxPriceAgeHours = argv[++index];
     else if (arg === '--reference-time') options.referenceTime = argv[++index];
     else if (arg === '--json') options.json = true;
@@ -498,6 +564,8 @@ Options:
   --require-city-hotels   Also require cityStats hotelCount > 0 for every catalog city
   --min-hotels-per-city N Require at least N cityStats hotels per city
   --min-rows-per-city N   Require at least N cityStats rows per city
+  --min-priced-hotels-per-city N Require at least N priced hotels per city
+  --min-priced-rows-per-city N   Require at least N priced rows per city
   --max-price-age-hours N Require every city price update to be within N hours
   --reference-time <time> Reference timestamp for freshness checks. Default: now
   --json                  Print full JSON summary
@@ -517,6 +585,8 @@ if (isCli) {
         || options.requireCityHotels
         || getNonNegativeInteger(options.minHotelsPerCity, 0) > 0
         || getNonNegativeInteger(options.minRowsPerCity, 0) > 0
+        || getNonNegativeInteger(options.minPricedHotelsPerCity, 0) > 0
+        || getNonNegativeInteger(options.minPricedRowsPerCity, 0) > 0
         || getNonNegativeNumber(options.maxPriceAgeHours, 0) > 0;
       if (shouldGate && !summary.passed) process.exitCode = 1;
     }

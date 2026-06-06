@@ -33,6 +33,8 @@ const fieldAliases = {
   province: ['province', '省份', '省', '地区省份'],
   city: ['city', 'destination', '目的地', '城市', '市'],
   address: ['address', '酒店地址', '地址', '详细地址'],
+  price: ['price', 'lowestPrice', 'dailyPrice', 'salePrice', 'roomPrice', '最低价', '价格', '日价', '房价', '售卖价', '含税价'],
+  totalPrice: ['totalPrice', 'amount', 'totalAmount', '总价', '合计价', '订单金额'],
   providerName: ['source', 'provider', 'supplier', '供应商', '渠道', '来源'],
   checkIn: ['checkIn', 'startDate', '入住日期', '入住', '可售开始日期', '开始日期'],
   checkOut: ['checkOut', 'endDate', '离店日期', '离店', '可售结束日期', '结束日期'],
@@ -61,6 +63,9 @@ export async function buildInventoryManifest(options = {}) {
       ...(summary.cities.length ? {} : summary.provinces.length ? { provinces: summary.provinces } : {}),
       rowCount: summary.rowCount,
       hotelCount: summary.hotelCount,
+      pricedRowCount: summary.pricedRowCount,
+      pricedHotelCount: summary.pricedHotelCount,
+      ...(summary.minPrice ? { minPrice: summary.minPrice } : {}),
       ...(summary.updatedAt ? { updatedAt: summary.updatedAt } : {}),
       cityStats: summary.cityStats
     });
@@ -216,30 +221,48 @@ function summarizeInventoryRows(rows, filePath) {
   const provinces = new Set();
   const providers = new Set();
   const hotels = new Set();
+  const pricedHotels = new Set();
   const cityStats = new Map();
+  let pricedRowCount = 0;
+  let minPrice = 0;
   let updatedAt = '';
 
   rows.forEach((row, index) => {
     const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
     const hotelKey = getHotelKey(row, location, index);
     const available = pick(row, 'available') === undefined ? true : parseBoolean(pick(row, 'available'));
+    const price = normalizePrice(pick(row, 'price')) || normalizePrice(pick(row, 'totalPrice'));
+    const hasPrice = available && price > 0;
     const checkIn = normalizeDate(pick(row, 'checkIn'));
     const checkOut = normalizeDate(pick(row, 'checkOut'));
     const rowUpdatedAt = normalizeTimestamp(pick(row, 'updatedAt'));
     updatedAt = maxTimestamp(updatedAt, rowUpdatedAt);
     if (location.city) cities.add(location.city);
     if (location.province) provinces.add(location.province);
+    if (hasPrice) {
+      pricedRowCount += 1;
+      pricedHotels.add(hotelKey);
+      minPrice = minPositivePrice(minPrice, price);
+    }
     if (location.city && available) {
       const existing = cityStats.get(location.city) || {
         province: location.province || findCityProvince(location.city),
         city: location.city,
         rowCount: 0,
         hotels: new Set(),
+        pricedRowCount: 0,
+        pricedHotels: new Set(),
+        minPrice: 0,
         dateStats: new Map(),
         updatedAt: ''
       };
       existing.rowCount += 1;
       existing.hotels.add(hotelKey);
+      if (hasPrice) {
+        existing.pricedRowCount += 1;
+        existing.pricedHotels.add(hotelKey);
+        existing.minPrice = minPositivePrice(existing.minPrice, price);
+      }
       existing.updatedAt = maxTimestamp(existing.updatedAt, rowUpdatedAt);
       const dateKey = `${checkIn || ''}|${checkOut || ''}`;
       const dateStat = existing.dateStats.get(dateKey) || {
@@ -247,10 +270,18 @@ function summarizeInventoryRows(rows, filePath) {
         checkOut,
         rowCount: 0,
         hotels: new Set(),
+        pricedRowCount: 0,
+        pricedHotels: new Set(),
+        minPrice: 0,
         updatedAt: ''
       };
       dateStat.rowCount += 1;
       dateStat.hotels.add(hotelKey);
+      if (hasPrice) {
+        dateStat.pricedRowCount += 1;
+        dateStat.pricedHotels.add(hotelKey);
+        dateStat.minPrice = minPositivePrice(dateStat.minPrice, price);
+      }
       dateStat.updatedAt = maxTimestamp(dateStat.updatedAt, rowUpdatedAt);
       existing.dateStats.set(dateKey, dateStat);
       cityStats.set(location.city, existing);
@@ -264,6 +295,9 @@ function summarizeInventoryRows(rows, filePath) {
     name: providers.size === 1 ? [...providers][0] : formatSourceName(filePath),
     rowCount: rows.length,
     hotelCount: hotels.size,
+    pricedRowCount,
+    pricedHotelCount: pricedHotels.size,
+    minPrice,
     updatedAt,
     cities: sortChinese([...cities]),
     provinces: sortChinese([...provinces]),
@@ -278,6 +312,9 @@ function formatCityStats(cityStats) {
       city: item.city,
       rowCount: item.rowCount,
       hotelCount: item.hotels.size,
+      pricedRowCount: item.pricedRowCount,
+      pricedHotelCount: item.pricedHotels.size,
+      ...(item.minPrice ? { minPrice: item.minPrice } : {}),
       ...(item.updatedAt ? { updatedAt: item.updatedAt } : {}),
       dateStats: formatDateStats(item.dateStats)
     }))
@@ -291,6 +328,9 @@ function formatDateStats(dateStats) {
       ...(item.checkOut ? { checkOut: item.checkOut } : {}),
       rowCount: item.rowCount,
       hotelCount: item.hotels.size,
+      pricedRowCount: item.pricedRowCount,
+      pricedHotelCount: item.pricedHotels.size,
+      ...(item.minPrice ? { minPrice: item.minPrice } : {}),
       ...(item.updatedAt ? { updatedAt: item.updatedAt } : {})
     }))
     .sort((a, b) => String(a.checkIn || '').localeCompare(String(b.checkIn || ''))
@@ -336,6 +376,22 @@ function normalizeTimestamp(value) {
     .replace(' ', 'T');
   const date = new Date(normalized);
   return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function normalizePrice(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  const text = String(value).replace(/,/g, '').trim();
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  const price = Number(match[0]);
+  return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
+function minPositivePrice(current, next) {
+  const price = Number(next || 0);
+  if (!Number.isFinite(price) || price <= 0) return current || 0;
+  if (!current) return price;
+  return price < current ? price : current;
 }
 
 function maxTimestamp(current, next) {

@@ -132,6 +132,49 @@ describe('inventory coverage audit', () => {
     }
   });
 
+  it('flags cities below configured priced hotel and row minimums', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-price-minimums-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 12,
+      hotelCount: 8,
+      pricedRowCount: city === '北京' ? 3 : 10,
+      pricedHotelCount: city === '北京' ? 1 : 6,
+      minPrice: city === '北京' ? 588 : 388
+    }));
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '价格统计源', url: 'inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      const summary = await auditInventoryCoverage({
+        rootDir: root,
+        minPricedHotelsPerCity: 5,
+        minPricedRowsPerCity: 8
+      });
+      assert.equal(summary.coveredCities, cityCatalog.length);
+      assert.equal(summary.pricedHotelCount, 1 + (cityCatalog.length - 1) * 6);
+      assert.equal(summary.pricedRowCount, 3 + (cityCatalog.length - 1) * 10);
+      assert.equal(summary.citiesWithPricedHotels, cityCatalog.length);
+      assert.equal(summary.citiesBelowPriceMinimums.length, 1);
+      assert.deepEqual(summary.citiesBelowPriceMinimums[0], {
+        province: '北京',
+        city: '北京',
+        pricedRowCount: 3,
+        pricedHotelCount: 1,
+        minPricedRowCount: 8,
+        minPricedHotelCount: 5,
+        minPrice: 588
+      });
+      assert.equal(summary.passed, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('filters city inventory evidence by requested stay dates', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-date-evidence-'));
     await mkdir(join(root, 'public'), { recursive: true });
@@ -171,6 +214,56 @@ describe('inventory coverage audit', () => {
         hotelCount: 0,
         minRowCount: 0,
         minHotelCount: 1
+      });
+      assert.equal(summary.passed, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('filters priced inventory evidence by requested stay dates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-date-price-evidence-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 8,
+      hotelCount: 4,
+      pricedRowCount: 8,
+      pricedHotelCount: 4,
+      minPrice: 388,
+      dateStats: [{
+        checkIn: city === '北京' ? '2026-01-01' : '2026-06-01',
+        checkOut: city === '北京' ? '2026-02-01' : '2026-12-31',
+        rowCount: 8,
+        hotelCount: 4,
+        pricedRowCount: 8,
+        pricedHotelCount: 4,
+        minPrice: 388
+      }]
+    }));
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '日期价格统计源', url: 'inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      const summary = await auditInventoryCoverage({
+        rootDir: root,
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        minPricedHotelsPerCity: 1
+      });
+      assert.equal(summary.pricedRowCount, (cityCatalog.length - 1) * 8);
+      assert.equal(summary.pricedHotelCount, (cityCatalog.length - 1) * 4);
+      assert.deepEqual(summary.citiesBelowPriceMinimums.find((item) => item.city === '北京'), {
+        province: '北京',
+        city: '北京',
+        pricedRowCount: 0,
+        pricedHotelCount: 0,
+        minPricedRowCount: 0,
+        minPricedHotelCount: 1,
+        minPrice: 0
       });
       assert.equal(summary.passed, false);
     } finally {

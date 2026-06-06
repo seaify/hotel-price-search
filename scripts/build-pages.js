@@ -39,6 +39,14 @@ async function preparePagesInventory(rootDir, options) {
     options.minRowsPerCity ?? process.env.HOTEL_PAGES_MIN_ROWS_PER_CITY,
     0
   );
+  const minPricedHotelsPerCity = getNonNegativeInteger(
+    options.minPricedHotelsPerCity ?? process.env.HOTEL_PAGES_MIN_PRICED_HOTELS_PER_CITY,
+    0
+  );
+  const minPricedRowsPerCity = getNonNegativeInteger(
+    options.minPricedRowsPerCity ?? process.env.HOTEL_PAGES_MIN_PRICED_ROWS_PER_CITY,
+    0
+  );
   const maxPriceAgeHours = getNonNegativeNumber(
     options.maxPriceAgeHours ?? process.env.HOTEL_PAGES_MAX_PRICE_AGE_HOURS,
     0
@@ -52,7 +60,13 @@ async function preparePagesInventory(rootDir, options) {
     ?? (requireFullCoverage || minHotelsPerCity > 0 || isTruthy(process.env.HOTEL_PAGES_REQUIRE_CITY_HOTELS));
   const auditInventory = options.auditInventory
     ?? isTruthy(process.env.HOTEL_PAGES_AUDIT_INVENTORY);
-  const shouldBlockOnAudit = requireFullCoverage || requireCityHotels || minHotelsPerCity > 0 || minRowsPerCity > 0 || maxPriceAgeHours > 0;
+  const shouldBlockOnAudit = requireFullCoverage
+    || requireCityHotels
+    || minHotelsPerCity > 0
+    || minRowsPerCity > 0
+    || minPricedHotelsPerCity > 0
+    || minPricedRowsPerCity > 0
+    || maxPriceAgeHours > 0;
   const manifestPath = options.manifestPath || `${publicDir}/hotel-inventory.manifest.json`;
   let manifest = null;
   let coverage = null;
@@ -74,6 +88,8 @@ async function preparePagesInventory(rootDir, options) {
       requireCityHotels,
       minHotelsPerCity,
       minRowsPerCity,
+      minPricedHotelsPerCity,
+      minPricedRowsPerCity,
       maxPriceAgeHours,
       referenceTime,
       checkIn,
@@ -138,6 +154,10 @@ function formatCoverageFailure(coverage) {
     .slice(0, 8)
     .map((item) => `${item.province}/${item.city} hotels ${item.hotelCount}/${item.minHotelCount}, rows ${item.rowCount}/${item.minRowCount}`)
     .join(', ');
+  const belowPriceMinimums = coverage.citiesBelowPriceMinimums
+    .slice(0, 8)
+    .map((item) => `${item.province}/${item.city} priced hotels ${item.pricedHotelCount}/${item.minPricedHotelCount}, priced rows ${item.pricedRowCount}/${item.minPricedRowCount}`)
+    .join(', ');
   const stalePrices = coverage.citiesWithStalePrices
     .slice(0, 8)
     .map((item) => `${item.province}/${item.city} updated ${item.updatedAt || 'missing'}`)
@@ -147,6 +167,7 @@ function formatCoverageFailure(coverage) {
     missing ? `Missing: ${missing}${coverage.missingCities.length > 8 ? ` ... +${coverage.missingCities.length - 8}` : ''}` : '',
     withoutHotelStats ? `Without hotel stats: ${withoutHotelStats}${coverage.citiesWithoutHotelStats.length > 8 ? ` ... +${coverage.citiesWithoutHotelStats.length - 8}` : ''}` : '',
     belowMinimums ? `Below minimums: ${belowMinimums}${coverage.citiesBelowMinimums.length > 8 ? ` ... +${coverage.citiesBelowMinimums.length - 8}` : ''}` : '',
+    belowPriceMinimums ? `Below price minimums: ${belowPriceMinimums}${coverage.citiesBelowPriceMinimums.length > 8 ? ` ... +${coverage.citiesBelowPriceMinimums.length - 8}` : ''}` : '',
     stalePrices ? `Stale prices: ${stalePrices}${coverage.citiesWithStalePrices.length > 8 ? ` ... +${coverage.citiesWithStalePrices.length - 8}` : ''}` : '',
     unscoped ? `Unscoped sources: ${unscoped}` : '',
     unknown ? `Unknown destinations: ${unknown}` : ''

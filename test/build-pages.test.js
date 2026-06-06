@@ -30,8 +30,11 @@ describe('GitHub Pages builder', () => {
       assert.deepEqual(manifest.sources[0].cities, ['深圳']);
       assert.equal(manifest.sources[0].rowCount, 1);
       assert.equal(manifest.sources[0].hotelCount, 1);
+      assert.equal(manifest.sources[0].pricedRowCount, 1);
+      assert.equal(manifest.sources[0].pricedHotelCount, 1);
+      assert.equal(manifest.sources[0].minPrice, 588);
       assert.deepEqual(manifest.sources[0].cityStats, [
-        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1 }] }
+        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1, pricedRowCount: 1, pricedHotelCount: 1, minPrice: 588, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1, pricedRowCount: 1, pricedHotelCount: 1, minPrice: 588 }] }
       ]);
       assert.match(docsStaticData, /window\.HOTEL_STATIC_MODE = true;/);
       assert.match(publicStaticData, /window\.HOTEL_STATIC_MODE = false;/);
@@ -80,6 +83,34 @@ describe('GitHub Pages builder', () => {
       await assert.rejects(
         () => buildPages({ rootDir: root, minHotelsPerCity: 2 }),
         /Below minimums: .* hotels 1\/2/
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects manifests that do not meet the configured per-city priced hotel minimum', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-pages-price-minimums-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 4,
+      hotelCount: 2,
+      pricedRowCount: city === '北京' ? 0 : 4,
+      pricedHotelCount: city === '北京' ? 0 : 2,
+      minPrice: city === '北京' ? 0 : 388
+    }));
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '低价格证据源', url: 'https://example.com/inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      await assert.rejects(
+        () => buildPages({ rootDir: root, minPricedHotelsPerCity: 1 }),
+        /Below price minimums: 北京\/北京 priced hotels 0\/1/
       );
     } finally {
       await rm(root, { recursive: true, force: true });
