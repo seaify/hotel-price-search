@@ -36,7 +36,8 @@ const fieldAliases = {
   providerName: ['source', 'provider', 'supplier', '供应商', '渠道', '来源'],
   checkIn: ['checkIn', 'startDate', '入住日期', '入住', '可售开始日期', '开始日期'],
   checkOut: ['checkOut', 'endDate', '离店日期', '离店', '可售结束日期', '结束日期'],
-  available: ['available', 'isAvailable', '可售', '是否可售', '库存状态', '状态']
+  available: ['available', 'isAvailable', '可售', '是否可售', '库存状态', '状态'],
+  updatedAt: ['updatedAt', 'updated_at', 'fetchedAt', 'fetched_at', 'syncedAt', 'synced_at', 'priceUpdatedAt', 'price_updated_at', 'rateUpdatedAt', 'rate_updated_at', 'lastUpdated', 'last_updated', '价格更新时间', '报价更新时间', '库存更新时间', '抓取时间', '同步时间', '更新时间']
 };
 
 export async function buildInventoryManifest(options = {}) {
@@ -60,6 +61,7 @@ export async function buildInventoryManifest(options = {}) {
       ...(summary.cities.length ? {} : summary.provinces.length ? { provinces: summary.provinces } : {}),
       rowCount: summary.rowCount,
       hotelCount: summary.hotelCount,
+      ...(summary.updatedAt ? { updatedAt: summary.updatedAt } : {}),
       cityStats: summary.cityStats
     });
   }
@@ -215,6 +217,7 @@ function summarizeInventoryRows(rows, filePath) {
   const providers = new Set();
   const hotels = new Set();
   const cityStats = new Map();
+  let updatedAt = '';
 
   rows.forEach((row, index) => {
     const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
@@ -222,6 +225,8 @@ function summarizeInventoryRows(rows, filePath) {
     const available = pick(row, 'available') === undefined ? true : parseBoolean(pick(row, 'available'));
     const checkIn = normalizeDate(pick(row, 'checkIn'));
     const checkOut = normalizeDate(pick(row, 'checkOut'));
+    const rowUpdatedAt = normalizeTimestamp(pick(row, 'updatedAt'));
+    updatedAt = maxTimestamp(updatedAt, rowUpdatedAt);
     if (location.city) cities.add(location.city);
     if (location.province) provinces.add(location.province);
     if (location.city && available) {
@@ -230,19 +235,23 @@ function summarizeInventoryRows(rows, filePath) {
         city: location.city,
         rowCount: 0,
         hotels: new Set(),
-        dateStats: new Map()
+        dateStats: new Map(),
+        updatedAt: ''
       };
       existing.rowCount += 1;
       existing.hotels.add(hotelKey);
+      existing.updatedAt = maxTimestamp(existing.updatedAt, rowUpdatedAt);
       const dateKey = `${checkIn || ''}|${checkOut || ''}`;
       const dateStat = existing.dateStats.get(dateKey) || {
         checkIn,
         checkOut,
         rowCount: 0,
-        hotels: new Set()
+        hotels: new Set(),
+        updatedAt: ''
       };
       dateStat.rowCount += 1;
       dateStat.hotels.add(hotelKey);
+      dateStat.updatedAt = maxTimestamp(dateStat.updatedAt, rowUpdatedAt);
       existing.dateStats.set(dateKey, dateStat);
       cityStats.set(location.city, existing);
     }
@@ -255,6 +264,7 @@ function summarizeInventoryRows(rows, filePath) {
     name: providers.size === 1 ? [...providers][0] : formatSourceName(filePath),
     rowCount: rows.length,
     hotelCount: hotels.size,
+    updatedAt,
     cities: sortChinese([...cities]),
     provinces: sortChinese([...provinces]),
     cityStats: formatCityStats(cityStats)
@@ -268,6 +278,7 @@ function formatCityStats(cityStats) {
       city: item.city,
       rowCount: item.rowCount,
       hotelCount: item.hotels.size,
+      ...(item.updatedAt ? { updatedAt: item.updatedAt } : {}),
       dateStats: formatDateStats(item.dateStats)
     }))
     .sort((a, b) => a.province.localeCompare(b.province, 'zh-CN') || a.city.localeCompare(b.city, 'zh-CN'));
@@ -279,7 +290,8 @@ function formatDateStats(dateStats) {
       ...(item.checkIn ? { checkIn: item.checkIn } : {}),
       ...(item.checkOut ? { checkOut: item.checkOut } : {}),
       rowCount: item.rowCount,
-      hotelCount: item.hotels.size
+      hotelCount: item.hotels.size,
+      ...(item.updatedAt ? { updatedAt: item.updatedAt } : {})
     }))
     .sort((a, b) => String(a.checkIn || '').localeCompare(String(b.checkIn || ''))
       || String(a.checkOut || '').localeCompare(String(b.checkOut || '')));
@@ -307,6 +319,29 @@ function normalizeDate(value) {
   if (!match) return '';
   const [, year, month, day] = match;
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function normalizeTimestamp(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const date = new Date(numeric < 1e12 ? numeric * 1000 : numeric);
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+  }
+  const normalized = text
+    .replace(/[年月]/g, '-')
+    .replace(/日/g, '')
+    .replace(/\//g, '-')
+    .replace(' ', 'T');
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function maxTimestamp(current, next) {
+  if (!next) return current || '';
+  if (!current) return next;
+  return next > current ? next : current;
 }
 
 function parseBoolean(value) {

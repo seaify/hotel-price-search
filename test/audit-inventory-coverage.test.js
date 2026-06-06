@@ -177,4 +177,41 @@ describe('inventory coverage audit', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('flags cities with stale price update evidence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-freshness-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 8,
+      hotelCount: 4,
+      updatedAt: city === '北京' ? '2026-06-04T09:00:00Z' : '2026-06-06T09:00:00Z'
+    }));
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '新鲜度统计源', url: 'inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      const summary = await auditInventoryCoverage({
+        rootDir: root,
+        maxPriceAgeHours: 24,
+        referenceTime: '2026-06-06T12:00:00Z'
+      });
+      assert.equal(summary.freshnessCutoff, '2026-06-05T12:00:00.000Z');
+      assert.equal(summary.citiesWithFreshPrices, cityCatalog.length - 1);
+      assert.equal(summary.citiesWithStalePrices.length, 1);
+      assert.deepEqual(summary.citiesWithStalePrices[0], {
+        province: '北京',
+        city: '北京',
+        updatedAt: '2026-06-04T09:00:00.000Z',
+        maxPriceAgeHours: 24,
+        referenceTime: '2026-06-06T12:00:00.000Z'
+      });
+      assert.equal(summary.passed, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

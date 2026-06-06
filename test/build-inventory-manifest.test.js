@@ -53,4 +53,25 @@ describe('inventory manifest builder', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('records latest price update timestamps in source, city and date stats', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-manifest-freshness-'));
+    const inventoryDir = join(root, 'public', 'inventory');
+    await mkdir(inventoryDir, { recursive: true });
+    await writeFile(join(inventoryDir, 'fresh.csv'), [
+      'id,name,province,city,source,price,checkIn,checkOut,updatedAt',
+      'sz-1,深圳新鲜价格酒店,广东,深圳,新鲜供应商,588,2026-06-01,2026-12-31,2026-06-06T10:00:00Z',
+      'sz-2,深圳更新价格酒店,广东,深圳,新鲜供应商,688,2026-06-01,2026-12-31,2026-06-06T12:00:00Z'
+    ].join('\n'));
+
+    try {
+      const manifest = await buildInventoryManifest({ rootDir: root });
+      const source = manifest.sources[0];
+      assert.equal(source.updatedAt, '2026-06-06T12:00:00.000Z');
+      assert.equal(source.cityStats[0].updatedAt, '2026-06-06T12:00:00.000Z');
+      assert.equal(source.cityStats[0].dateStats[0].updatedAt, '2026-06-06T12:00:00.000Z');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

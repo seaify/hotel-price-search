@@ -39,6 +39,11 @@ async function preparePagesInventory(rootDir, options) {
     options.minRowsPerCity ?? process.env.HOTEL_PAGES_MIN_ROWS_PER_CITY,
     0
   );
+  const maxPriceAgeHours = getNonNegativeNumber(
+    options.maxPriceAgeHours ?? process.env.HOTEL_PAGES_MAX_PRICE_AGE_HOURS,
+    0
+  );
+  const referenceTime = options.referenceTime ?? process.env.HOTEL_PAGES_FRESHNESS_REFERENCE_TIME ?? '';
   const checkIn = options.checkIn ?? process.env.HOTEL_PAGES_COVERAGE_CHECK_IN ?? '';
   const checkOut = options.checkOut ?? process.env.HOTEL_PAGES_COVERAGE_CHECK_OUT ?? '';
   const requireFullCoverage = options.requireFullInventoryCoverage
@@ -47,7 +52,7 @@ async function preparePagesInventory(rootDir, options) {
     ?? (requireFullCoverage || minHotelsPerCity > 0 || isTruthy(process.env.HOTEL_PAGES_REQUIRE_CITY_HOTELS));
   const auditInventory = options.auditInventory
     ?? isTruthy(process.env.HOTEL_PAGES_AUDIT_INVENTORY);
-  const shouldBlockOnAudit = requireFullCoverage || requireCityHotels || minHotelsPerCity > 0 || minRowsPerCity > 0;
+  const shouldBlockOnAudit = requireFullCoverage || requireCityHotels || minHotelsPerCity > 0 || minRowsPerCity > 0 || maxPriceAgeHours > 0;
   const manifestPath = options.manifestPath || `${publicDir}/hotel-inventory.manifest.json`;
   let manifest = null;
   let coverage = null;
@@ -69,6 +74,8 @@ async function preparePagesInventory(rootDir, options) {
       requireCityHotels,
       minHotelsPerCity,
       minRowsPerCity,
+      maxPriceAgeHours,
+      referenceTime,
       checkIn,
       checkOut
     });
@@ -131,11 +138,16 @@ function formatCoverageFailure(coverage) {
     .slice(0, 8)
     .map((item) => `${item.province}/${item.city} hotels ${item.hotelCount}/${item.minHotelCount}, rows ${item.rowCount}/${item.minRowCount}`)
     .join(', ');
+  const stalePrices = coverage.citiesWithStalePrices
+    .slice(0, 8)
+    .map((item) => `${item.province}/${item.city} updated ${item.updatedAt || 'missing'}`)
+    .join(', ');
   return [
     `Inventory coverage audit failed: ${coverage.coveredCities}/${coverage.totalCities} cities covered.`,
     missing ? `Missing: ${missing}${coverage.missingCities.length > 8 ? ` ... +${coverage.missingCities.length - 8}` : ''}` : '',
     withoutHotelStats ? `Without hotel stats: ${withoutHotelStats}${coverage.citiesWithoutHotelStats.length > 8 ? ` ... +${coverage.citiesWithoutHotelStats.length - 8}` : ''}` : '',
     belowMinimums ? `Below minimums: ${belowMinimums}${coverage.citiesBelowMinimums.length > 8 ? ` ... +${coverage.citiesBelowMinimums.length - 8}` : ''}` : '',
+    stalePrices ? `Stale prices: ${stalePrices}${coverage.citiesWithStalePrices.length > 8 ? ` ... +${coverage.citiesWithStalePrices.length - 8}` : ''}` : '',
     unscoped ? `Unscoped sources: ${unscoped}` : '',
     unknown ? `Unknown destinations: ${unknown}` : ''
   ].filter(Boolean).join(' ');
@@ -150,6 +162,13 @@ function getNonNegativeInteger(value, fallback = 0) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) return fallback;
   return Math.floor(number);
+}
+
+function getNonNegativeNumber(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return number;
 }
 
 const isCli = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;

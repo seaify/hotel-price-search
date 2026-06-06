@@ -121,4 +121,34 @@ describe('GitHub Pages builder', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('rejects manifests with stale per-city price updates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-pages-freshness-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 6,
+      hotelCount: 3,
+      updatedAt: city === '北京' ? '2026-06-04T09:00:00Z' : '2026-06-06T09:00:00Z'
+    }));
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '过期价格源', url: 'https://example.com/inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      await assert.rejects(
+        () => buildPages({
+          rootDir: root,
+          maxPriceAgeHours: 24,
+          referenceTime: '2026-06-06T12:00:00Z'
+        }),
+        /Stale prices: 北京\/北京 updated 2026-06-04T09:00:00.000Z/
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
