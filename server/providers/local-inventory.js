@@ -530,7 +530,8 @@ async function readInventoryFile(file) {
 
 async function readRemoteInventoryUrl(url, options = {}) {
   const fieldMap = normalizeFieldMap(options.fieldMap || {});
-  const cacheKey = `remote:${url}:${options.sourceName || ''}:${JSON.stringify(fieldMap)}`;
+  const headers = normalizeRemoteHeaders(options.headers || {});
+  const cacheKey = `remote:${url}:${options.sourceName || ''}:${JSON.stringify(fieldMap)}:${JSON.stringify(headers)}`;
   const cached = inventoryCache.get(cacheKey);
   const cacheTtlMs = getInventoryCacheSeconds() * 1000;
   if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
@@ -545,7 +546,7 @@ async function readRemoteInventoryUrl(url, options = {}) {
     };
   }
 
-  const { text, format } = await fetchRemoteInventoryContent(url);
+  const { text, format } = await fetchRemoteInventoryContent(url, { headers });
   const rows = parseInventory(text, format, { fieldMap }).map((row) => ({
     ...row,
     source: row.source || row.provider || row.supplier || options.sourceName || row.source
@@ -586,7 +587,8 @@ async function readRemoteInventoryManifestUrl(url) {
   const loads = await Promise.allSettled(sources.map((source) =>
     readRemoteInventoryUrl(source.url, {
       sourceName: source.name,
-      fieldMap: source.fieldMap
+      fieldMap: source.fieldMap,
+      headers: source.headers
     })
   ));
   const loaded = loads
@@ -619,9 +621,12 @@ async function readRemoteInventoryManifestUrl(url) {
   };
 }
 
-async function fetchRemoteInventoryContent(url) {
+async function fetchRemoteInventoryContent(url, options = {}) {
   const response = await fetch(url, {
-    headers: getRemoteInventoryHeaders(),
+    headers: {
+      ...getRemoteInventoryHeaders(),
+      ...normalizeRemoteHeaders(options.headers || {})
+    },
     signal: AbortSignal.timeout(getRemoteTimeoutMs())
   });
   if (!response.ok) {
@@ -679,15 +684,21 @@ function parseRemoteInventoryManifestSources(content, manifestUrl) {
     .map((source, index) => ({
       url: new URL(source.url || source.href, manifestUrl).href,
       name: String(source.name || source.provider || source.supplier || `远程供应商${index + 1}`),
-      fieldMap: normalizeFieldMap(source.fieldMap || source.fields || {})
+      fieldMap: normalizeFieldMap(source.fieldMap || source.fields || {}),
+      headers: normalizeRemoteHeaders(source.headers || {})
     }));
 }
 
 function getRemoteInventoryHeaders() {
   if (!process.env.HOTEL_DATA_URL_HEADERS) return {};
-  const parsed = JSON.parse(process.env.HOTEL_DATA_URL_HEADERS);
+  return normalizeRemoteHeaders(JSON.parse(process.env.HOTEL_DATA_URL_HEADERS), 'HOTEL_DATA_URL_HEADERS');
+}
+
+function normalizeRemoteHeaders(value, label = 'headers') {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!parsed) return {};
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-    throw new Error('HOTEL_DATA_URL_HEADERS 必须是 JSON 对象。');
+    throw new Error(`${label} 必须是 JSON 对象。`);
   }
   return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
 }

@@ -1999,6 +1999,9 @@ describe('hotel search data', () => {
             {
               name: '映射远程供应商',
               url: '/mapped.json',
+              headers: {
+                Authorization: 'Bearer mapped-token'
+              },
               fieldMap: {
                 id: 'offerId',
                 name: 'hotel.title',
@@ -2019,18 +2022,23 @@ describe('hotel search data', () => {
             },
             {
               name: '标准远程供应商',
-              url: '/standard.csv'
+              url: '/standard.csv',
+              headers: {
+                'X-Api-Key': 'standard-key'
+              }
             }
           ]
         }));
         return;
       }
       if (request.url === '/mapped.json') {
+        assert.equal(request.headers.authorization, 'Bearer mapped-token');
         response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         response.end(mappedJson);
         return;
       }
       if (request.url === '/standard.csv') {
+        assert.equal(request.headers['x-api-key'], 'standard-key');
         response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8' });
         response.end(standardCsv);
         return;

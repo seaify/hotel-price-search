@@ -58,6 +58,9 @@ npm start
     {
       "name": "ctrip",
       "url": "https://example.com/ctrip-prices.json",
+      "headers": {
+        "Authorization": "Bearer ctrip_token"
+      },
       "fieldMap": {
         "id": "offerId",
         "name": "hotel.title",
@@ -70,11 +73,16 @@ npm start
     },
     {
       "name": "meituan",
-      "url": "https://example.com/meituan-prices.csv"
+      "url": "https://example.com/meituan-prices.csv",
+      "headers": {
+        "X-Api-Key": "meituan_key"
+      }
     }
   ]
 }
 ```
+
+`headers` 只适用于 Node 后端读取远程源；GitHub Pages 静态版由浏览器直接请求远程源，不能附加私密鉴权头，适合使用允许跨域访问的公开或签名 URL。
 
 如果供应商提供的是实时查价接口，而不是定时导出文件，也可以配置通用实时 API。系统会把目的地、日期、成人、房间、价格等查询参数传给供应商，并把对方返回的 CSV/JSON/JSONL 统一归一化到酒店结果里：
 
