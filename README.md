@@ -385,6 +385,15 @@ npm run build:pages
 
 然后重新运行 `npm run build:pages` 并推送，构建后的 `docs/hotel-inventory.manifest.json` 会随站点一起发布。全国库存建议按城市或省份分片，避免用户打开页面时一次下载完整全国价格库。
 
+仓库也内置了 `.github/workflows/publish-supplier-inventory.yml`，可以在 GitHub Actions 里手动触发或每天自动刷新供应商库存。先在仓库 Settings -> Secrets and variables -> Actions 里配置：
+
+- Secret `HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON`：供应商导出 URL 或文件路径数组，例如 `["https://supplier.example.com/nationwide.jsonl.gz?signature=..."]`
+- Secret `HOTEL_SUPPLIER_FIELD_MAP_JSON`：可选，供应商字段映射 JSON，例如 `{"id":"offer.id","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.sale"}`
+- Variable `HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY` / `HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY`：可选，每城最低酒店数和正价酒店数门槛，默认都是 `1`
+- Variable `HOTEL_SUPPLIER_CHECK_IN` / `HOTEL_SUPPLIER_CHECK_OUT` / `HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS`：可选，按入住日期和价格更新时间卡发布质量
+
+workflow 会先运行测试，再执行 `npm run publish:supplier-inventory:env`。验收通过才会写入 `public/inventory/`、刷新 manifest、构建 `docs/` 并自动提交；如果供应商 URL 未配置，定时任务只会提示未配置，不会生成失败发布。
+
 如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：
 
 ```bash
