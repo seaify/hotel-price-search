@@ -1,0 +1,3 @@
+id,name,province,city,district,address,star,rating,reviews,price,currency,amenities,tags,payment,cancellation,source,checkIn,checkOut,available,bookingUrl
+partner-bj-001,北京国贸真实供应商酒店,北京,北京,朝阳,北京市朝阳区建国门外大街 1 号,5,4.7,1902,1090,CNY,"健身房|免费 Wi-Fi|早餐","真实库存|国贸商圈",到店付,预订前确认,伙伴供应商CSV,2026-06-01,2026-12-31,true,https://example.com/hotels/partner-bj-001
+partner-sh-001,上海外滩真实供应商酒店,上海,上海,黄浦,上海市黄浦区中山东一路 18 号,5,4.8,3110,1490,CNY,"江景房|下午茶|礼宾服务","真实库存|外滩|江景",在线付,限时免费取消,伙伴供应商CSV,2026-06-01,2026-12-31,true,https://example.com/hotels/partner-sh-001

@@ -1,0 +1,4 @@
+id,name,province,city,district,address,star,rating,reviews,price,currency,amenities,tags,payment,cancellation,source,checkIn,checkOut,available,bookingUrl
+sample-bj-001,北京国贸真实供应商酒店,北京,北京,朝阳,北京市朝阳区建国门外大街 1 号,5,4.8,2188,1280,CNY,"泳池|行政酒廊|免费 Wi-Fi","真实库存|国贸商圈|高星酒店",在线付,限时免费取消,供应商CSV,2026-06-01,2026-12-31,true,https://example.com/hotels/sample-bj-001
+sample-sh-001,上海外滩真实供应商酒店,上海,上海,黄浦,上海市黄浦区中山东一路 18 号,5,4.7,3201,1580,CNY,"江景房|健身房|早餐","真实库存|外滩|江景",到店付,预订前确认,供应商CSV,2026-06-01,2026-12-31,true,https://example.com/hotels/sample-sh-001
+sample-syx-001,三亚海棠湾真实供应商度假酒店,海南,三亚,海棠湾,三亚市海棠湾旅游度假区,5,4.9,1860,1880,CNY,"泳池|亲子乐园|机场接送","真实库存|海棠湾|度假",在线付,限时免费取消,供应商CSV,2026-06-01,2026-12-31,true,https://example.com/hotels/sample-syx-001

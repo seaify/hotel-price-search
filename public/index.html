@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>全国酒店价格查询</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="./">
+          <span class="brand-mark">住</span>
+          <span>
+            <strong>全国酒店价格查询</strong>
+            <small>城市、商圈、品牌、日期一站式筛选</small>
+          </span>
+        </a>
+        <div class="source-pill" id="sourcePill">数据源检测中</div>
+      </header>
+
+      <main class="workspace">
+        <section class="search-panel" aria-label="酒店搜索">
+          <form id="searchForm" class="search-grid">
+            <label>
+              <span>目的地</span>
+              <input id="cityInput" name="city" list="cityList" placeholder="北京 / 上海 / 成都 / 全国" autocomplete="off" />
+              <datalist id="cityList"></datalist>
+            </label>
+            <label>
+              <span>酒店 / 商圈 / 设施</span>
+              <input id="keywordInput" name="keyword" placeholder="亚朵、海棠湾、免费停车" autocomplete="off" />
+            </label>
+            <label>
+              <span>入住</span>
+              <input id="checkInInput" name="checkIn" type="date" />
+            </label>
+            <label>
+              <span>离店</span>
+              <input id="checkOutInput" name="checkOut" type="date" />
+            </label>
+            <label>
+              <span>成人</span>
+              <input id="adultsInput" name="adults" type="number" min="1" max="8" value="2" />
+            </label>
+            <label>
+              <span>房间</span>
+              <input id="roomsInput" name="rooms" type="number" min="1" max="5" value="1" />
+            </label>
+            <button class="primary-action" type="submit">搜索价格</button>
+          </form>
+        </section>
+
+        <section class="content-grid">
+          <aside class="filters" aria-label="筛选条件">
+            <div class="filter-heading">
+              <strong>筛选</strong>
+              <button id="resetFilters" type="button">重置</button>
+            </div>
+            <label>
+              <span>星级</span>
+              <select id="starSelect" name="star">
+                <option value="">全部星级</option>
+                <option value="5">五星 / 豪华</option>
+                <option value="4">四星 / 高端</option>
+                <option value="3">三星 / 经济</option>
+              </select>
+            </label>
+            <label>
+              <span>最低价</span>
+              <input id="minPriceInput" name="minPrice" type="number" min="0" step="50" placeholder="不限" />
+            </label>
+            <label>
+              <span>最高价</span>
+              <input id="maxPriceInput" name="maxPrice" type="number" min="0" step="50" placeholder="不限" />
+            </label>
+            <label>
+              <span>排序</span>
+              <select id="sortSelect" name="sort">
+                <option value="recommend">综合推荐</option>
+                <option value="price-asc">价格从低到高</option>
+                <option value="price-desc">价格从高到低</option>
+                <option value="rating">评分优先</option>
+              </select>
+            </label>
+
+            <div class="coverage">
+              <span>覆盖城市</span>
+              <strong id="cityCount">--</strong>
+              <p>可按城市精确查价，也可留空查看全国候选酒店。</p>
+            </div>
+
+            <div class="provider-status" id="providerStatus">
+              <strong>接入状态</strong>
+              <p>正在检测数据源</p>
+            </div>
+
+            <div class="import-panel">
+              <strong>导入价格</strong>
+              <label class="file-picker" for="inventoryFileInput">选择 CSV/JSON 文件</label>
+              <input id="inventoryFileInput" class="file-input" type="file" accept=".csv,.json,application/json,text/csv" />
+              <button id="importButton" type="button" disabled>导入 CSV/JSON</button>
+              <p id="importStatus">未选择文件</p>
+            </div>
+          </aside>
+
+          <section class="results-area" aria-live="polite">
+            <div class="results-toolbar">
+              <div>
+                <p id="resultMeta">正在准备搜索</p>
+                <h1 id="resultTitle">全国酒店价格</h1>
+              </div>
+              <div class="toolbar-actions">
+                <button id="nationwideButton" type="button">全国</button>
+                <button id="nearBusinessButton" type="button">近商圈</button>
+              </div>
+            </div>
+
+            <div id="notice" class="notice" hidden></div>
+            <div id="popularCities" class="city-strip"></div>
+            <div id="results" class="hotel-grid"></div>
+            <div class="load-more-wrap">
+              <button id="loadMoreButton" class="load-more-button" type="button" hidden>加载更多酒店</button>
+            </div>
+            <div id="emptyState" class="empty-state" hidden>
+              <strong>没有找到匹配酒店</strong>
+              <p>换一个城市、酒店名或放宽价格范围再试。</p>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <template id="hotelCardTemplate">
+      <article class="hotel-card">
+        <div class="hotel-image-wrap">
+          <img class="hotel-image" alt="" loading="lazy" />
+          <span class="hotel-source"></span>
+        </div>
+        <div class="hotel-body">
+          <div class="hotel-title-row">
+            <div>
+              <h2 class="hotel-name"></h2>
+              <p class="hotel-location"></p>
+            </div>
+            <div class="hotel-rating"></div>
+          </div>
+          <div class="tag-row"></div>
+          <p class="amenities"></p>
+          <div class="rates-panel"></div>
+          <div class="hotel-footer">
+            <div>
+              <span class="price-label">每晚</span>
+              <strong class="price"></strong>
+              <span class="total-price"></span>
+            </div>
+            <button class="hotel-action" type="button">复制酒店名</button>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <script src="static-data.js"></script>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
