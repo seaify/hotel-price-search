@@ -11,7 +11,8 @@ export async function publishSupplierInventory(options = {}) {
   const rootDir = resolve(options.rootDir || options.cwd || process.cwd());
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || [])
     .map((inputFile) => normalizeInventoryInputReference(inputFile, rootDir));
-  if (!inputFiles.length) throw new Error('At least one supplier inventory input file is required.');
+  const sourceManifest = options.sourceManifest || options.sourceManifestUrl || options.sourceManifestConfig || '';
+  if (!inputFiles.length && !sourceManifest) throw new Error('At least one supplier inventory input file or source manifest is required.');
 
   const gateOptions = getGateOptions(options);
   const verification = await verifySupplierInventory({
@@ -19,6 +20,7 @@ export async function publishSupplierInventory(options = {}) {
     inputFiles,
     fieldMap: options.fieldMap || options.fields || {},
     headers: options.headers || options.requestHeaders || {},
+    sourceManifest,
     ...gateOptions
   });
 
@@ -41,6 +43,7 @@ export async function publishSupplierInventory(options = {}) {
     manifestPath,
     fieldMap: options.fieldMap || options.fields || {},
     headers: options.headers || options.requestHeaders || {},
+    sourceManifest,
     baseUrl: options.baseUrl || '',
     clean: options.clean !== false
   });
@@ -120,6 +123,7 @@ function parseArgs(argv) {
     else if (arg === '--base-url') options.baseUrl = argv[++index];
     else if (arg === '--field-map') options.fieldMap = argv[++index];
     else if (arg === '--headers') options.headers = argv[++index];
+    else if (arg === '--source-manifest') options.sourceManifest = argv[++index];
     else if (arg === '--check-in') options.checkIn = argv[++index];
     else if (arg === '--check-out') options.checkOut = argv[++index];
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
@@ -180,6 +184,7 @@ Options:
   --base-url <url>     Optional absolute URL prefix for generated manifest source URLs
   --field-map <json-or-file> Map non-standard supplier fields to internal fields
   --headers <json-or-file> Request headers for protected remote supplier URLs
+  --source-manifest <json-or-file-or-url> Multi-source supplier manifest with per-source url, headers and fieldMap
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
   --min-hotels-per-city N         Default: 1

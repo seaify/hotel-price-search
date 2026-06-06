@@ -30,6 +30,9 @@ jobs:
       HOTEL_SUPPLIER_INVENTORY_INPUT: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUT }}
       HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON }}
       HOTEL_SUPPLIER_INVENTORY_HEADERS: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_HEADERS }}
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON }}
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_URL: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL }}
+      HOTEL_SUPPLIER_SOURCE_MANIFEST: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST }}
       HOTEL_SUPPLIER_FIELD_MAP_JSON: ${{ secrets.HOTEL_SUPPLIER_FIELD_MAP_JSON }}
       HOTEL_SUPPLIER_FIELD_MAP: ${{ secrets.HOTEL_SUPPLIER_FIELD_MAP }}
       HOTEL_SUPPLIER_CHECK_IN: ${{ github.event.inputs.check_in || vars.HOTEL_SUPPLIER_CHECK_IN || '' }}
@@ -53,8 +56,8 @@ jobs:
       - name: Check supplier inventory configuration
         id: config
         run: |
-          if [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUT" ]; then
-            echo "::notice title=Supplier inventory not configured::Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON or HOTEL_SUPPLIER_INVENTORY_INPUTS in repository secrets."
+          if [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUT" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_URL" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST" ]; then
+            echo "::notice title=Supplier inventory not configured::Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON or HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON in repository secrets."
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"

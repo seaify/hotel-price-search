@@ -10,7 +10,6 @@ const defaultManifestPath = 'public/hotel-inventory.manifest.json';
 export async function splitInventoryShards(options = {}) {
   const rootDir = resolve(options.rootDir || process.cwd());
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || []);
-  if (!inputFiles.length) throw new Error('At least one input inventory file is required.');
 
   const outputDir = resolve(rootDir, options.outputDir || defaultOutputDir);
   if (options.clean) await rm(outputDir, { recursive: true, force: true });
@@ -18,18 +17,23 @@ export async function splitInventoryShards(options = {}) {
 
   const fieldMap = await loadFieldMap(options.fieldMap || options.fields || {}, rootDir);
   const requestHeaders = await loadRequestHeaders(options.headers || options.requestHeaders || {}, rootDir);
+  const inventorySources = await loadInventorySources({
+    inputFiles,
+    sourceManifest: options.sourceManifest || options.sourceManifestUrl || options.sourceManifestConfig
+  }, rootDir, { fieldMap, requestHeaders });
+  if (!inventorySources.length) throw new Error('At least one input inventory file or source manifest is required.');
   const shards = new Map();
   const skippedRows = [];
   let rowCount = 0;
 
-  for (const inputFile of inputFiles) {
-    const input = await loadInventoryInput(inputFile, rootDir, requestHeaders);
-    const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, fieldMap));
+  for (const source of inventorySources) {
+    const input = await loadInventoryInput(source.inputFile, rootDir, source.requestHeaders);
+    const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, source.fieldMap));
     rows.forEach((row, index) => {
       rowCount += 1;
       const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
       if (!location.city || !location.province) {
-        skippedRows.push({ inputFile, rowNumber: index + 1, reason: 'missing city or province' });
+        skippedRows.push({ inputFile: source.inputFile, sourceName: source.name, rowNumber: index + 1, reason: 'missing city or province' });
         return;
       }
       const key = `${location.province}|${location.city}`;
@@ -67,7 +71,7 @@ export async function splitInventoryShards(options = {}) {
   }
 
   return {
-    inputFiles,
+    inputFiles: inventorySources.map((source) => source.inputFile),
     fieldMap,
     requestHeaders: maskHeaders(requestHeaders),
     rowCount,
@@ -77,6 +81,106 @@ export async function splitInventoryShards(options = {}) {
     shards: writtenShards,
     manifest
   };
+}
+
+async function loadInventorySources(options, rootDir, defaults = {}) {
+  const directSources = options.inputFiles.map((inputFile, index) => ({
+    inputFile,
+    name: `supplier-${index + 1}`,
+    fieldMap: defaults.fieldMap || {},
+    requestHeaders: defaults.requestHeaders || {}
+  }));
+  const manifestSources = await loadSourceManifestSources(options.sourceManifest, rootDir, defaults);
+  return [...directSources, ...manifestSources];
+}
+
+async function loadSourceManifestSources(value, rootDir, defaults = {}) {
+  if (!value) return [];
+  const manifests = Array.isArray(value) ? value : [value];
+  const sources = [];
+  for (const manifest of manifests) {
+    const loaded = await loadSourceManifest(manifest, rootDir, defaults.requestHeaders || {});
+    for (let index = 0; index < loaded.sources.length; index += 1) {
+      const source = normalizeManifestSource(loaded.sources[index], index, loaded.base, rootDir, defaults);
+      if (source) {
+        source.fieldMap = await loadFieldMap(source.fieldMap, rootDir);
+        sources.push(source);
+      }
+    }
+  }
+  return sources;
+}
+
+async function loadSourceManifest(value, rootDir, requestHeaders = {}) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return { sources: [], base: { type: 'local', dir: rootDir } };
+    if (text.startsWith('{') || text.startsWith('[')) {
+      return { sources: parseSourceManifestJson(text), base: { type: 'local', dir: rootDir } };
+    }
+    if (isRemoteInventoryInput(text)) {
+      const response = await fetch(text, { headers: requestHeaders });
+      if (!response.ok) throw new Error(`Failed to fetch supplier source manifest URL ${text}: HTTP ${response.status}`);
+      return { sources: parseSourceManifestJson(await response.text()), base: { type: 'remote', url: text } };
+    }
+    const manifestPath = resolve(rootDir, text);
+    return {
+      sources: parseSourceManifestJson(await readFile(manifestPath, 'utf8')),
+      base: { type: 'local', dir: dirname(manifestPath) }
+    };
+  }
+  return { sources: parseSourceManifestObject(value), base: { type: 'local', dir: rootDir } };
+}
+
+function parseSourceManifestJson(value) {
+  return parseSourceManifestObject(JSON.parse(value));
+}
+
+function parseSourceManifestObject(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value.sources)) return value.sources;
+  if (Array.isArray(value.feeds)) return value.feeds;
+  if (Array.isArray(value.inventorySources)) return value.inventorySources;
+  return [value];
+}
+
+function normalizeManifestSource(source, index, base, rootDir, defaults = {}) {
+  if (!source || typeof source !== 'object') return null;
+  const rawInput = source.url || source.href || source.input || source.file || source.path;
+  if (!rawInput) return null;
+  const inputFile = normalizeManifestSourceInput(rawInput, base, rootDir);
+  const fieldMap = source.fieldMap || source.fields || defaults.fieldMap || {};
+  const requestHeaders = {
+    ...(defaults.requestHeaders || {}),
+    ...loadRequestHeadersSync(source.headers || source.requestHeaders || {})
+  };
+  return {
+    inputFile,
+    name: String(source.name || source.provider || source.supplier || `source-${index + 1}`),
+    fieldMap,
+    requestHeaders
+  };
+}
+
+function normalizeManifestSourceInput(value, base, rootDir) {
+  const input = String(value || '').trim();
+  if (isRemoteInventoryInput(input)) return input;
+  if (base?.type === 'remote') return new URL(input, base.url).href;
+  return resolve(base?.dir || rootDir, input);
+}
+
+function loadRequestHeadersSync(value) {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text || !text.startsWith('{')) return {};
+    return loadRequestHeadersSync(JSON.parse(text));
+  }
+  if (Array.isArray(value) || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value)
+    .map(([name, headerValue]) => [String(name).trim(), String(headerValue ?? '').trim()])
+    .filter(([name, headerValue]) => name && headerValue));
 }
 
 async function loadRequestHeaders(value, rootDir) {
@@ -239,6 +343,7 @@ function parseArgs(argv) {
     else if (arg === '--base-url') options.baseUrl = argv[++index];
     else if (arg === '--field-map') options.fieldMap = argv[++index];
     else if (arg === '--headers') options.headers = argv[++index];
+    else if (arg === '--source-manifest') options.sourceManifest = argv[++index];
     else if (arg === '--clean') options.clean = true;
     else if (arg === '--no-manifest') options.buildManifest = false;
     else if (arg === '--help') options.help = true;
@@ -257,6 +362,7 @@ Options:
   --base-url <url>    Optional absolute URL prefix for generated manifest source URLs
   --field-map <json-or-file> Map non-standard supplier fields to internal fields
   --headers <json-or-file> Request headers for protected remote supplier URLs
+  --source-manifest <json-or-file-or-url> Multi-source supplier manifest with per-source url, headers and fieldMap
   --clean             Remove the output directory before writing shards
   --no-manifest       Only write shards, do not rebuild the manifest
 `);

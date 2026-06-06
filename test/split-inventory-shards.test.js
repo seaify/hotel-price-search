@@ -199,6 +199,43 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('loads multi-source manifests with per-source headers and field maps', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-source-manifest-shards-'));
+    const server = await startSourceManifestServer({
+      mappedJson: JSON.stringify([
+        {
+          offer: { id: 'manifest-bj-1', sale: 588 },
+          hotel: { title: '北京清单映射酒店', provinceName: '北京', cityName: '北京' }
+        }
+      ]),
+      standardCsv: [
+        'id,name,province,city,source,price',
+        'manifest-sh-1,上海清单标准酒店,上海,上海,标准清单供应商,688'
+      ].join('\n')
+    });
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        sourceManifest: server.manifestUrl,
+        clean: true
+      });
+
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.deepEqual(server.requests, {
+        mappedAuthorization: 'Bearer mapped-token',
+        standardApiKey: 'standard-key'
+      });
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('北京')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('上海')));
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads gzip-compressed remote JSON Lines supplier URLs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-remote-gzip-shards-'));
     const jsonl = [
@@ -246,6 +283,57 @@ async function startInventoryServer(content, options = {}) {
   const { port } = server.address();
   return {
     url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}
+
+async function startSourceManifestServer({ mappedJson, standardCsv }) {
+  const requests = {};
+  const server = createServer((request, response) => {
+    if (request.url === '/manifest.json') {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        sources: [
+          {
+            name: '映射清单供应商',
+            url: '/mapped.json',
+            headers: { Authorization: 'Bearer mapped-token' },
+            fieldMap: {
+              id: 'offer.id',
+              name: 'hotel.title',
+              province: 'hotel.provinceName',
+              city: 'hotel.cityName',
+              price: 'offer.sale'
+            }
+          },
+          {
+            name: '标准清单供应商',
+            url: '/standard.csv',
+            headers: { 'X-Api-Key': 'standard-key' }
+          }
+        ]
+      }));
+      return;
+    }
+    if (request.url === '/mapped.json') {
+      requests.mappedAuthorization = request.headers.authorization;
+      response.writeHead(request.headers.authorization === 'Bearer mapped-token' ? 200 : 401, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(mappedJson);
+      return;
+    }
+    if (request.url === '/standard.csv') {
+      requests.standardApiKey = request.headers['x-api-key'];
+      response.writeHead(request.headers['x-api-key'] === 'standard-key' ? 200 : 401, { 'content-type': 'text/csv; charset=utf-8' });
+      response.end(standardCsv);
+      return;
+    }
+    response.writeHead(404).end('not found');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    requests,
+    manifestUrl: `http://127.0.0.1:${port}/manifest.json`,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }

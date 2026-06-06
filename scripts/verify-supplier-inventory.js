@@ -11,9 +11,10 @@ export async function verifySupplierInventory(options = {}) {
   const cwd = resolve(options.cwd || process.cwd());
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || [])
     .map((inputFile) => normalizeInventoryInputReference(inputFile, cwd));
-  if (!inputFiles.length) throw new Error('At least one supplier inventory input file is required.');
   const fieldMap = normalizeFieldMapReference(options.fieldMap || options.fields || {}, cwd);
   const requestHeaders = normalizeJsonFileReference(options.headers || options.requestHeaders || {}, cwd);
+  const sourceManifest = normalizeSourceManifestReference(options.sourceManifest || options.sourceManifestUrl || options.sourceManifestConfig || '', cwd);
+  if (!inputFiles.length && !sourceManifest) throw new Error('At least one supplier inventory input file or source manifest is required.');
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-'));
   const keepTemp = Boolean(options.keepTemp);
@@ -23,6 +24,7 @@ export async function verifySupplierInventory(options = {}) {
       inputFiles,
       fieldMap,
       headers: requestHeaders,
+      sourceManifest,
       clean: true,
       manifestPath: defaultManifestPath
     });
@@ -64,7 +66,9 @@ function buildNextCommands(inputFiles, options) {
   const fieldMapOption = fieldMap ? ` --field-map ${quoteShell(formatFieldMapOption(fieldMap))}` : '';
   const requestHeaders = options.headers || options.requestHeaders;
   const headersOption = requestHeaders ? ` --headers ${quoteShell(formatHeadersOption(requestHeaders))}` : '';
-  const splitCommand = `npm run split:inventory-shards -- ${inputs}${fieldMapOption}${headersOption} --clean`;
+  const sourceManifest = options.sourceManifest || options.sourceManifestUrl || options.sourceManifestConfig;
+  const sourceManifestOption = sourceManifest ? ` --source-manifest ${quoteShell(formatSourceManifestOption(sourceManifest))}` : '';
+  const splitCommand = `npm run split:inventory-shards -- ${inputs}${fieldMapOption}${headersOption}${sourceManifestOption} --clean`;
   const envParts = ['HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true'];
   const minHotelsPerCity = getNonNegativeInteger(options.minHotelsPerCity, 1);
   const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 1);
@@ -100,10 +104,15 @@ function normalizeFieldMapReference(value, cwd) {
   return normalizeJsonFileReference(value, cwd);
 }
 
+function normalizeSourceManifestReference(value, cwd) {
+  return normalizeJsonFileReference(value, cwd);
+}
+
 function normalizeJsonFileReference(value, cwd) {
   if (typeof value !== 'string') return value;
   const text = value.trim();
   if (!text || text.startsWith('{')) return text;
+  if (text.startsWith('[') || isRemoteInventoryInput(text)) return text;
   return resolve(cwd, text);
 }
 
@@ -135,6 +144,7 @@ function parseArgs(argv) {
     else if (arg === '--check-out') options.checkOut = argv[++index];
     else if (arg === '--field-map') options.fieldMap = argv[++index];
     else if (arg === '--headers') options.headers = argv[++index];
+    else if (arg === '--source-manifest') options.sourceManifest = argv[++index];
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
     else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
     else if (arg === '--min-priced-hotels-per-city') options.minPricedHotelsPerCity = argv[++index];
@@ -201,8 +211,40 @@ function formatHeadersOption(value) {
   return JSON.stringify(maskHeaderValues(value || {}));
 }
 
+function formatSourceManifestOption(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text.startsWith('{') && !text.startsWith('[')) return text;
+    try {
+      return JSON.stringify(maskSourceManifestHeaders(JSON.parse(text)));
+    } catch {
+      return '{"sources":"***"}';
+    }
+  }
+  return JSON.stringify(maskSourceManifestHeaders(value || {}));
+}
+
 function formatJsonOption(value) {
   return typeof value === 'string' ? value : JSON.stringify(value || {});
+}
+
+function maskSourceManifestHeaders(value) {
+  if (Array.isArray(value)) return value.map(maskSourceHeaders);
+  if (!value || typeof value !== 'object') return {};
+  if (Array.isArray(value.sources)) return { ...value, sources: value.sources.map(maskSourceHeaders) };
+  if (Array.isArray(value.feeds)) return { ...value, feeds: value.feeds.map(maskSourceHeaders) };
+  if (Array.isArray(value.inventorySources)) return { ...value, inventorySources: value.inventorySources.map(maskSourceHeaders) };
+  return maskSourceHeaders(value);
+}
+
+function maskSourceHeaders(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+  if (!source.headers && !source.requestHeaders) return source;
+  return {
+    ...source,
+    ...(source.headers ? { headers: maskHeaderValues(source.headers) } : {}),
+    ...(source.requestHeaders ? { requestHeaders: maskHeaderValues(source.requestHeaders) } : {})
+  };
 }
 
 function maskHeaderValues(headers = {}) {
@@ -225,6 +267,7 @@ Options:
   --check-out DATE     Require city/date evidence covering this check-out date
   --field-map <json-or-file> Map non-standard supplier fields to internal fields
   --headers <json-or-file> Request headers for protected remote supplier URLs
+  --source-manifest <json-or-file-or-url> Multi-source supplier manifest with per-source url, headers and fieldMap
   --min-hotels-per-city N         Default: 1
   --min-rows-per-city N           Default: 1
   --min-priced-hotels-per-city N  Default: 1

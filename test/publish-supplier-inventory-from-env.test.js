@@ -10,6 +10,7 @@ describe('supplier inventory env publisher config', () => {
         'https://supplier.example.com/export-2.jsonl.gz?token=x;y,z'
       ]),
       HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON: '{"Authorization":"Bearer supplier-token"}',
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON: '{"sources":[{"url":"https://supplier.example.com/export.csv","headers":{"Authorization":"Bearer source-token"}}]}',
       HOTEL_SUPPLIER_FIELD_MAP_JSON: '{"id":"offer.id","price":"rate.sale"}',
       HOTEL_SUPPLIER_CHECK_IN: '2026-06-06',
       HOTEL_SUPPLIER_CHECK_OUT: '2026-06-07',
@@ -24,6 +25,7 @@ describe('supplier inventory env publisher config', () => {
     ]);
     assert.equal(options.rootDir, '/repo');
     assert.equal(options.headers, '{"Authorization":"Bearer supplier-token"}');
+    assert.equal(options.sourceManifest, '{"sources":[{"url":"https://supplier.example.com/export.csv","headers":{"Authorization":"Bearer source-token"}}]}');
     assert.equal(options.fieldMap, '{"id":"offer.id","price":"rate.sale"}');
     assert.equal(options.checkIn, '2026-06-06');
     assert.equal(options.checkOut, '2026-06-07');
@@ -52,5 +54,21 @@ describe('supplier inventory env publisher config', () => {
       () => buildPublishSupplierInventoryOptions({}, '/repo'),
       /Set HOTEL_SUPPLIER_INVENTORY_INPUTS/
     );
+  });
+
+  it('allows a source manifest without standalone supplier inventory inputs', () => {
+    const options = buildPublishSupplierInventoryOptions({
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON: JSON.stringify({
+        sources: [
+          {
+            name: 'manifest-source',
+            url: 'https://supplier.example.com/manifest-source.csv'
+          }
+        ]
+      })
+    }, '/repo');
+
+    assert.deepEqual(options.inputFiles, []);
+    assert.match(options.sourceManifest, /manifest-source/);
   });
 });

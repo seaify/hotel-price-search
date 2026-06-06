@@ -389,6 +389,7 @@ npm run build:pages
 
 - Secret `HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON`：供应商导出 URL 或文件路径数组，例如 `["https://supplier.example.com/nationwide.jsonl.gz?signature=..."]`
 - Secret `HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON`：可选，受保护导出 URL 的请求头，例如 `{"Authorization":"Bearer token","X-Api-Key":"key"}`
+- Secret `HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON`：可选，多供应商清单，格式同 Node 版 `HOTEL_DATA_MANIFEST_CONFIG`，每个 `source` 可独立配置 `url`、`headers`、`fieldMap`
 - Secret `HOTEL_SUPPLIER_FIELD_MAP_JSON`：可选，供应商字段映射 JSON，例如 `{"id":"offer.id","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.sale"}`
 - Variable `HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY` / `HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY`：可选，每城最低酒店数和正价酒店数门槛，默认都是 `1`
 - Variable `HOTEL_SUPPLIER_CHECK_IN` / `HOTEL_SUPPLIER_CHECK_OUT` / `HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS`：可选，按入住日期和价格更新时间卡发布质量
@@ -414,6 +415,7 @@ npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-
 ```bash
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv
 npm run verify:supplier-inventory -- --input 'https://supplier.example.com/export/nationwide.csv?signature=...' --headers '{"Authorization":"Bearer token"}'
+npm run verify:supplier-inventory -- --source-manifest /absolute/path/hotel-suppliers.json
 npm run verify:supplier-inventory -- --input /absolute/path/custom-schema.json --field-map '{"id":"offer.id","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.sale","checkIn":"stay.from","checkOut":"stay.to"}'
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z
 npm run publish:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z

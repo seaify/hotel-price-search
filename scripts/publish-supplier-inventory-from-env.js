@@ -4,8 +4,9 @@ import { publishSupplierInventory } from './publish-supplier-inventory.js';
 
 export function buildPublishSupplierInventoryOptions(env = process.env, cwd = process.cwd()) {
   const inputFiles = getInputFiles(env);
-  if (!inputFiles.length) {
-    throw new Error('Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, HOTEL_SUPPLIER_INVENTORY_INPUTS, or HOTEL_SUPPLIER_INVENTORY_INPUT before publishing supplier inventory.');
+  const sourceManifest = firstNonEmpty(env.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON, env.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL, env.HOTEL_SUPPLIER_SOURCE_MANIFEST, '');
+  if (!inputFiles.length && !sourceManifest) {
+    throw new Error('Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, HOTEL_SUPPLIER_INVENTORY_INPUTS, HOTEL_SUPPLIER_INVENTORY_INPUT, or HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON before publishing supplier inventory.');
   }
 
   const options = {
@@ -13,6 +14,7 @@ export function buildPublishSupplierInventoryOptions(env = process.env, cwd = pr
     inputFiles,
     fieldMap: firstNonEmpty(env.HOTEL_SUPPLIER_FIELD_MAP_JSON, env.HOTEL_SUPPLIER_FIELD_MAP, ''),
     headers: firstNonEmpty(env.HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON, env.HOTEL_SUPPLIER_INVENTORY_HEADERS, ''),
+    sourceManifest,
     checkIn: firstNonEmpty(env.HOTEL_SUPPLIER_CHECK_IN, ''),
     checkOut: firstNonEmpty(env.HOTEL_SUPPLIER_CHECK_OUT, ''),
     minHotelsPerCity: firstNonEmpty(env.HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY, ''),

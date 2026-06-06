@@ -76,6 +76,69 @@ describe('supplier inventory publisher', () => {
     }
   });
 
+  it('publishes a nationwide multi-source manifest with per-source config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-publish-manifest-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    const mappedCities = cityCatalog.filter((_, index) => index % 2 === 0);
+    const standardCities = cityCatalog.filter((_, index) => index % 2 === 1);
+    const mappedJson = JSON.stringify(mappedCities.map(({ province, city }, index) => ({
+      offer: {
+        id: `mapped-${index + 1}`,
+        sale: 500 + index,
+        updatedAt: '2026-06-06T12:00:00Z'
+      },
+      hotel: {
+        title: `${city}清单映射发布酒店`,
+        provinceName: province,
+        cityName: city
+      },
+      stay: {
+        from: '2026-06-01',
+        to: '2026-12-31'
+      }
+    })));
+    const standardCsv = [
+      'id,name,province,city,source,price,checkIn,checkOut,updatedAt',
+      ...standardCities.map(({ province, city }, index) => [
+        `standard-${index + 1}`,
+        `${city}清单标准发布酒店`,
+        province,
+        city,
+        '标准清单发布供应商',
+        600 + index,
+        '2026-06-01',
+        '2026-12-31',
+        '2026-06-06T12:00:00Z'
+      ].join(','))
+    ].join('\n');
+    const server = await startPublishSourceManifestServer({ mappedJson, standardCsv });
+
+    try {
+      const result = await publishSupplierInventory({
+        rootDir: root,
+        sourceManifest: server.manifestUrl,
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        maxPriceAgeHours: 24,
+        referenceTime: '2026-06-06T18:00:00Z'
+      });
+
+      assert.equal(result.published, true);
+      assert.equal(result.verification.coverage.coveredCities, cityCatalog.length);
+      assert.equal(result.build.coverage.pricedHotelCount, cityCatalog.length);
+      assert.deepEqual(server.requests, {
+        mappedAuthorization: 'Bearer mapped-publish-token',
+        standardApiKey: 'standard-publish-key'
+      });
+      const manifest = JSON.parse(await readFile(join(root, 'public', 'hotel-inventory.manifest.json'), 'utf8'));
+      assert.equal(manifest.sources.length, cityCatalog.length);
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not replace existing published shards when verification fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-publish-fail-'));
     await mkdir(join(root, 'public', 'inventory', 'existing'), { recursive: true });
@@ -121,6 +184,60 @@ async function startInventoryServer(content, options = {}) {
   const { port } = server.address();
   return {
     url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}
+
+async function startPublishSourceManifestServer({ mappedJson, standardCsv }) {
+  const requests = {};
+  const server = createServer((request, response) => {
+    if (request.url === '/manifest.json') {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        sources: [
+          {
+            name: '映射清单发布供应商',
+            url: '/mapped.json',
+            headers: { Authorization: 'Bearer mapped-publish-token' },
+            fieldMap: {
+              id: 'offer.id',
+              name: 'hotel.title',
+              province: 'hotel.provinceName',
+              city: 'hotel.cityName',
+              price: 'offer.sale',
+              checkIn: 'stay.from',
+              checkOut: 'stay.to',
+              updatedAt: 'offer.updatedAt'
+            }
+          },
+          {
+            name: '标准清单发布供应商',
+            url: '/standard.csv',
+            headers: { 'X-Api-Key': 'standard-publish-key' }
+          }
+        ]
+      }));
+      return;
+    }
+    if (request.url === '/mapped.json') {
+      requests.mappedAuthorization = request.headers.authorization;
+      response.writeHead(request.headers.authorization === 'Bearer mapped-publish-token' ? 200 : 401, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(mappedJson);
+      return;
+    }
+    if (request.url === '/standard.csv') {
+      requests.standardApiKey = request.headers['x-api-key'];
+      response.writeHead(request.headers['x-api-key'] === 'standard-publish-key' ? 200 : 401, { 'content-type': 'text/csv; charset=utf-8' });
+      response.end(standardCsv);
+      return;
+    }
+    response.writeHead(404).end('not found');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    requests,
+    manifestUrl: `http://127.0.0.1:${port}/manifest.json`,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }
