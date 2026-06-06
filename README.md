@@ -121,6 +121,28 @@ npm start
 
 `GET` 会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 会传 JSON body。响应字段格式和本地供应商文件相同，支持嵌套 JSON、CSV、JSONL/NDJSON。若供应商字段不同，可用 `fieldMap` 把内部字段映射到供应商返回字段，支持点路径或候选路径数组，例如 `{"name":"hotel.title","price":["rate.sale","price"],"bookingUrl":"rate.book"}`。
 
+单个实时供应商如果已经在接口侧做全国分页，可以返回总量和下一页信息，页面会沿用供应商的 `total` / `pagination`，不会把单页结果误判成全部结果：
+
+```json
+{
+  "total": 1250,
+  "coverageCities": 393,
+  "pagination": {
+    "offset": 24,
+    "limit": 24,
+    "nextOffset": 48,
+    "hasMore": true
+  },
+  "hotels": [
+    {
+      "hotelName": "北京供应商酒店",
+      "city": "北京市",
+      "price": 688
+    }
+  ]
+}
+```
+
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。JSONL 可参考 [hotel-prices.jsonl.sample](data/hotel-prices.jsonl.sample)。嵌套 JSON 可参考 [hotel-prices.nested.sample.json](data/hotel-prices.nested.sample.json)，支持 `hotels/items/data/results/records/list` 作为酒店集合，也支持酒店下的 `rooms/roomTypes/roomList` 和房型下的 `rates/offers/prices` 多报价结构。核心字段是：
 
 ```text

@@ -143,8 +143,15 @@ export async function searchHotels(params) {
   if (supplierApiStatus.configured) {
     try {
       const apiResults = await searchSupplierApiInventory(normalized);
-      if (apiResults.hotels.length > 0) {
-        const page = paginateHotels(apiResults.hotels, normalized);
+      if (apiResults.hotels.length > 0 || apiResults.pagination) {
+        const page = apiResults.pagination
+          ? {
+              hotels: apiResults.hotels,
+              total: apiResults.total,
+              coverageCities: apiResults.coverageCities,
+              pagination: apiResults.pagination
+            }
+          : paginateHotels(apiResults.hotels, normalized);
         const providers = await getProviderStatus();
         if (inventoryFallbackStatus) providers.localInventory = inventoryFallbackStatus;
         providers.supplierApi = apiResults.status;

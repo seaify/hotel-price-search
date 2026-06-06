@@ -1272,6 +1272,220 @@ describe('hotel search data', () => {
     }
   });
 
+  it('preserves pagination metadata from a single live supplier API', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-pagination-'));
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestUrl = process.env.HOTEL_DATA_MANIFEST_URL;
+    const previousManifestUrls = process.env.HOTEL_DATA_MANIFEST_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    const previousApiUrl = process.env.HOTEL_SUPPLIER_API_URL;
+    const previousApiUrls = process.env.HOTEL_SUPPLIER_API_URLS;
+    const previousApiConfig = process.env.HOTEL_SUPPLIER_API_CONFIG;
+    const previousApiName = process.env.HOTEL_SUPPLIER_API_NAME;
+    const previousApiNames = process.env.HOTEL_SUPPLIER_API_NAMES;
+    const previousApiMethod = process.env.HOTEL_SUPPLIER_API_METHOD;
+    const previousApiHeaders = process.env.HOTEL_SUPPLIER_API_HEADERS;
+    const previousAmadeusId = process.env.AMADEUS_CLIENT_ID;
+    const previousAmadeusSecret = process.env.AMADEUS_CLIENT_SECRET;
+    const requests = [];
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_URL;
+    delete process.env.HOTEL_DATA_MANIFEST_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    delete process.env.HOTEL_SUPPLIER_API_URLS;
+    delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+    delete process.env.HOTEL_SUPPLIER_API_NAMES;
+    delete process.env.HOTEL_SUPPLIER_API_HEADERS;
+    delete process.env.AMADEUS_CLIENT_ID;
+    delete process.env.AMADEUS_CLIENT_SECRET;
+    process.env.HOTEL_IMPORT_DIR = dir;
+    process.env.HOTEL_SUPPLIER_API_NAME = '分页实时供应商';
+    process.env.HOTEL_SUPPLIER_API_METHOD = 'GET';
+    clearInventoryCache();
+
+    const supplierServer = createHttpServer((request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const limit = Number(url.searchParams.get('limit') || 2);
+      const offset = Number(url.searchParams.get('offset') || 0);
+      requests.push({
+        city: url.searchParams.get('city'),
+        destinationType: url.searchParams.get('destinationType'),
+        limit: url.searchParams.get('limit'),
+        offset: url.searchParams.get('offset')
+      });
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        total: 1250,
+        coverageCities: 393,
+        pagination: {
+          offset,
+          limit,
+          nextOffset: offset + limit,
+          hasMore: true
+        },
+        hotels: [
+          {
+            id: `live-page-${offset + 1}`,
+            hotelName: '北京分页实时供应商酒店',
+            province: '北京市',
+            city: '北京市',
+            district: '朝阳',
+            price: 610,
+            source: '分页实时供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          },
+          {
+            id: `live-page-${offset + 2}`,
+            hotelName: '上海分页实时供应商酒店',
+            province: '上海市',
+            city: '上海市',
+            district: '静安',
+            price: 690,
+            source: '分页实时供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_URL = `http://127.0.0.1:${address.port}/paged-prices`;
+
+    try {
+      const result = await searchHotels({
+        city: '',
+        keyword: '分页实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        limit: '2',
+        offset: '2'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.mode, 'supplier-api');
+      assert.equal(result.total, 1250);
+      assert.equal(result.returned, 2);
+      assert.equal(result.coverageCities, 393);
+      assert.deepEqual(result.pagination, {
+        offset: 2,
+        limit: 2,
+        nextOffset: 4,
+        hasMore: true
+      });
+      assert.equal(result.hotels.length, 2);
+      assert.ok(result.hotels.some((hotel) => hotel.name === '北京分页实时供应商酒店'));
+      assert.ok(result.hotels.some((hotel) => hotel.name === '上海分页实时供应商酒店'));
+      assert.equal(result.providers.supplierApi.upstreamTotal, 1250);
+      assert.deepEqual(result.providers.supplierApi.pagination, result.pagination);
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].city, null);
+      assert.equal(requests[0].destinationType, 'nationwide');
+      assert.equal(requests[0].limit, '2');
+      assert.equal(requests[0].offset, '2');
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousManifestUrl === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URL;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URL = previousManifestUrl;
+      }
+      if (previousManifestUrls === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URLS;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URLS = previousManifestUrls;
+      }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
+      }
+      if (previousApiUrl === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_URL;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_URL = previousApiUrl;
+      }
+      if (previousApiUrls === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_URLS;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_URLS = previousApiUrls;
+      }
+      if (previousApiConfig === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_CONFIG = previousApiConfig;
+      }
+      if (previousApiName === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_NAME;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_NAME = previousApiName;
+      }
+      if (previousApiNames === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_NAMES;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_NAMES = previousApiNames;
+      }
+      if (previousApiMethod === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_METHOD;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_METHOD = previousApiMethod;
+      }
+      if (previousApiHeaders === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_HEADERS;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_HEADERS = previousApiHeaders;
+      }
+      if (previousAmadeusId === undefined) {
+        delete process.env.AMADEUS_CLIENT_ID;
+      } else {
+        process.env.AMADEUS_CLIENT_ID = previousAmadeusId;
+      }
+      if (previousAmadeusSecret === undefined) {
+        delete process.env.AMADEUS_CLIENT_SECRET;
+      } else {
+        process.env.AMADEUS_CLIENT_SECRET = previousAmadeusSecret;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('merges prices from multiple configured live supplier APIs', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-multi-'));
     const previousFile = process.env.HOTEL_DATA_FILE;

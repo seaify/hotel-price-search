@@ -22,11 +22,12 @@ export function getSupplierApiStatus() {
 
 export async function searchSupplierApiInventory(params) {
   const status = getSupplierApiStatus();
+  const sources = getSupplierApiSources();
   if (!status.configured) {
     return { hotels: [], status, rowCount: 0, sourceCount: 0 };
   }
 
-  const loads = await Promise.allSettled(getSupplierApiSources().map((source) => readSupplierApiSource(source, params)));
+  const loads = await Promise.allSettled(sources.map((source) => readSupplierApiSource(source, params)));
   const loaded = loads
     .filter((result) => result.status === 'fulfilled')
     .map((result) => result.value);
@@ -50,15 +51,22 @@ export async function searchSupplierApiInventory(params) {
     sourceErrors,
     rowCount: rows.length
   };
+  const hotels = searchInventoryRows(rows, params, {
+    source: 'supplier-api',
+    sourceLabel: status.name
+  });
+  const upstreamPage = buildSupplierApiPage(loaded, hotels, params);
+  if (upstreamPage) {
+    nextStatus.upstreamTotal = upstreamPage.total;
+    nextStatus.pagination = upstreamPage.pagination;
+  }
 
   return {
-    hotels: searchInventoryRows(rows, params, {
-      source: 'supplier-api',
-      sourceLabel: status.name
-    }),
+    hotels,
     status: nextStatus,
     rowCount: rows.length,
-    sourceCount: loaded.length
+    sourceCount: loaded.length,
+    ...(upstreamPage ? upstreamPage : {})
   };
 }
 
@@ -71,10 +79,103 @@ async function readSupplierApiSource(source, params) {
   }
 
   const format = getSupplierApiResponseFormat(url, response.headers.get('content-type') || '');
+  const parsed = parseSupplierApiResponse(text, format);
   return {
     ...source,
-    rows: parseInventory(text, format)
+    rows: parsed.rows,
+    pagination: parsed.pagination
   };
+}
+
+function parseSupplierApiResponse(text, format) {
+  const rows = parseInventory(text, format);
+  if (format !== '.json') return { rows, pagination: null };
+
+  try {
+    return {
+      rows,
+      pagination: extractSupplierApiPagination(JSON.parse(text), rows.length)
+    };
+  } catch {
+    return { rows, pagination: null };
+  }
+}
+
+function extractSupplierApiPagination(payload, rowCount) {
+  if (!payload || Array.isArray(payload) || typeof payload !== 'object') return null;
+  const candidates = [
+    payload.pagination,
+    payload.pageInfo,
+    payload.page_info,
+    payload.meta?.pagination,
+    payload.meta,
+    payload
+  ].filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+  const total = firstNumber(candidates, ['total', 'totalCount', 'total_count', 'totalResults', 'total_results', 'totalHotels', 'total_hotels', 'matchedCount', 'matched_count']);
+  if (total === null) return null;
+
+  const limit = firstNumber(candidates, ['limit', 'pageSize', 'page_size', 'size', 'perPage', 'per_page']);
+  const page = firstNumber(candidates, ['page', 'pageNo', 'page_no', 'pageNumber', 'page_number']);
+  const offset = firstNumber(candidates, ['offset', 'skip', 'start', 'startIndex', 'start_index']);
+  const returned = firstNumber(candidates, ['returned', 'returnedCount', 'returned_count', 'resultCount', 'result_count', 'count']);
+  return {
+    total,
+    limit,
+    offset: offset ?? (page !== null && limit !== null ? Math.max(0, page - 1) * limit : null),
+    nextOffset: firstNumber(candidates, ['nextOffset', 'next_offset']),
+    hasMore: firstBoolean(candidates, ['hasMore', 'has_more']),
+    coverageCities: firstNumber(candidates, ['coverageCities', 'coverage_cities', 'coveredCities', 'covered_cities', 'cityCount', 'city_count']),
+    returned: returned ?? rowCount
+  };
+}
+
+function buildSupplierApiPage(loaded, hotels, params) {
+  if (loaded.length !== 1 || !loaded[0].pagination) return null;
+  const metadata = loaded[0].pagination;
+  const requestedOffset = getPositiveInteger(params.offset, 0);
+  const requestedLimit = getPositiveInteger(params.limit, hotels.length || 24);
+  const offset = metadata.offset ?? requestedOffset;
+  const limit = metadata.limit ?? requestedLimit;
+  const returned = metadata.returned ?? hotels.length;
+  const total = Math.max(metadata.total, offset + hotels.length);
+  const nextOffset = metadata.nextOffset ?? offset + returned;
+  const hasMore = metadata.hasMore ?? nextOffset < total;
+
+  return {
+    total,
+    returned: hotels.length,
+    coverageCities: metadata.coverageCities ?? new Set(hotels.map((hotel) => hotel.city).filter(Boolean)).size,
+    pagination: {
+      offset,
+      limit,
+      nextOffset,
+      hasMore
+    }
+  };
+}
+
+function firstNumber(candidates, fields) {
+  for (const candidate of candidates) {
+    for (const field of fields) {
+      const value = candidate[field];
+      const number = Number(value);
+      if (Number.isFinite(number) && number >= 0) return Math.round(number);
+    }
+  }
+  return null;
+}
+
+function firstBoolean(candidates, fields) {
+  for (const candidate of candidates) {
+    for (const field of fields) {
+      const value = candidate[field];
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'string' && /^(true|false)$/i.test(value.trim())) {
+        return value.trim().toLowerCase() === 'true';
+      }
+    }
+  }
+  return null;
 }
 
 function buildSupplierApiRequest(source, params) {
