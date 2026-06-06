@@ -84,6 +84,8 @@ const elements = {
   coverageDashboard: document.querySelector('#coverageDashboard'),
   inventoryFileInput: document.querySelector('#inventoryFileInput'),
   importButton: document.querySelector('#importButton'),
+  remoteInventoryUrlInput: document.querySelector('#remoteInventoryUrlInput'),
+  remoteImportButton: document.querySelector('#remoteImportButton'),
   coverageDownloadButton: document.querySelector('#coverageDownloadButton'),
   importStatus: document.querySelector('#importStatus'),
   resultMeta: document.querySelector('#resultMeta'),
@@ -166,6 +168,10 @@ function bindEvents() {
   });
 
   elements.importButton.addEventListener('click', importInventoryFile);
+  elements.remoteInventoryUrlInput.addEventListener('input', () => {
+    elements.remoteImportButton.disabled = !elements.remoteInventoryUrlInput.value.trim();
+  });
+  elements.remoteImportButton.addEventListener('click', importRemoteInventoryUrl);
   elements.coverageDownloadButton.addEventListener('click', downloadCoverageReport);
 }
 
@@ -227,6 +233,45 @@ async function importInventoryFile() {
     elements.importStatus.textContent = error.message || '导入失败';
   } finally {
     elements.importButton.disabled = true;
+  }
+}
+
+async function importRemoteInventoryUrl() {
+  const sourceUrl = elements.remoteInventoryUrlInput.value.trim();
+  if (!sourceUrl || state.loading) return;
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(sourceUrl, window.location.href);
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error();
+  } catch {
+    elements.importStatus.textContent = '请输入有效的远程价格源 URL。';
+    return;
+  }
+
+  elements.remoteImportButton.disabled = true;
+  elements.importStatus.textContent = '正在加载远程价格源';
+  try {
+    const response = await fetch(parsedUrl.href, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`远程价格源读取失败：HTTP ${response.status}`);
+    const content = await response.text();
+    const filename = getRemoteInventoryFilename(parsedUrl);
+    const data = isStaticMode()
+      ? importStaticInventoryFile(filename, content)
+      : await fetchJson('/api/imports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, content })
+      });
+
+    await syncProviderPanels(data.providers);
+    elements.importStatus.textContent = `已加载 ${data.imported.rowCount} 条远程价格`;
+    elements.remoteInventoryUrlInput.value = '';
+    await runSearch();
+  } catch (error) {
+    elements.importStatus.textContent = error.message || '远程价格源导入失败。';
+  } finally {
+    elements.remoteImportButton.disabled = !elements.remoteInventoryUrlInput.value.trim();
   }
 }
 
@@ -742,6 +787,17 @@ function importStaticInventoryFile(filename, content) {
     imported: { filename, rowCount: rows.length },
     providers: getStaticProviderStatus()
   };
+}
+
+function getRemoteInventoryFilename(sourceUrl) {
+  const pathname = decodeURIComponent(sourceUrl.pathname || '');
+  const rawName = pathname.split('/').filter(Boolean).pop() || 'remote-hotel-prices.csv';
+  const cleanName = rawName.split(/[?#]/)[0] || 'remote-hotel-prices.csv';
+  return hasSupportedStaticInventoryExtension(cleanName) ? cleanName : `${cleanName}.csv`;
+}
+
+function hasSupportedStaticInventoryExtension(filename) {
+  return /\.(csv|json|jsonl|ndjson)$/i.test(filename);
 }
 
 function searchStaticHotels(query) {

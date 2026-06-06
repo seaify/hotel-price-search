@@ -424,6 +424,23 @@ select:focus {
   cursor: pointer;
 }
 
+.remote-source-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.remote-source-input {
+  min-height: 38px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 13px;
+}
+
 .import-panel button {
   min-height: 38px;
   border: 1px solid rgba(11, 122, 117, 0.34);
