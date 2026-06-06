@@ -9,7 +9,12 @@ import { cityCatalog } from '../server/hotel-data.js';
 describe('GitHub Pages builder', () => {
   it('copies nested inventory shards and generates the Pages inventory manifest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-pages-build-'));
+    await mkdir(join(root, 'data'), { recursive: true });
     await mkdir(join(root, 'public', 'inventory', 'guangdong'), { recursive: true });
+    await writeFile(join(root, 'data', 'supplier-inventory.template.csv'), 'id,name,province,city,price,source\n');
+    await writeFile(join(root, 'data', 'supplier-source-manifest.template.json'), JSON.stringify({
+      sources: [{ name: 'template-supplier', url: 'https://example.com/hotels.csv' }]
+    }, null, 2));
     await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
     await writeFile(join(root, 'public', 'app.js'), 'console.log("app");\n');
     await writeFile(join(root, 'public', 'inventory', 'guangdong', 'shenzhen.csv'), [
@@ -23,6 +28,8 @@ describe('GitHub Pages builder', () => {
       const readiness = JSON.parse(await readFile(join(root, 'docs', 'inventory-readiness.json'), 'utf8'));
       const docsStaticData = await readFile(join(root, 'docs', 'static-data.js'), 'utf8');
       const publicStaticData = await readFile(join(root, 'public', 'static-data.js'), 'utf8');
+      const csvTemplate = await readFile(join(root, 'docs', 'supplier-inventory.template.csv'), 'utf8');
+      const manifestTemplate = JSON.parse(await readFile(join(root, 'docs', 'supplier-source-manifest.template.json'), 'utf8'));
 
       assert.equal(result.inventory.generatedManifest, true);
       assert.equal(result.inventory.sourceCount, 1);
@@ -45,6 +52,8 @@ describe('GitHub Pages builder', () => {
       assert.equal(manifest.sources[0].pricedRowCount, 1);
       assert.equal(manifest.sources[0].pricedHotelCount, 1);
       assert.equal(manifest.sources[0].minPrice, 588);
+      assert.equal(csvTemplate, 'id,name,province,city,price,source\n');
+      assert.equal(manifestTemplate.sources[0].name, 'template-supplier');
       assert.deepEqual(manifest.sources[0].cityStats, [
         { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1, pricedRowCount: 1, pricedHotelCount: 1, minPrice: 588, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1, pricedRowCount: 1, pricedHotelCount: 1, minPrice: 588 }] }
       ]);

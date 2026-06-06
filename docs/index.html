@@ -99,6 +99,10 @@
 
             <div class="import-panel">
               <strong>导入价格</strong>
+              <div class="template-links" aria-label="供应商模板">
+                <a href="supplier-inventory.template.csv" download>CSV 模板</a>
+                <a href="supplier-source-manifest.template.json" download>多源清单模板</a>
+              </div>
               <label class="file-picker" for="inventoryFileInput">选择 CSV/JSON/JSONL 文件</label>
               <input id="inventoryFileInput" class="file-input" type="file" accept=".csv,.json,.jsonl,.ndjson,application/json,application/x-ndjson,text/csv" />
               <button id="importButton" type="button" disabled>导入价格文件</button>

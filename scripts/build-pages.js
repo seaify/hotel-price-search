@@ -7,6 +7,10 @@ import { buildInventoryManifest } from './build-inventory-manifest.js';
 
 const defaultRootDir = fileURLToPath(new URL('..', import.meta.url));
 const inventoryExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
+const supplierTemplateFiles = [
+  ['data/supplier-inventory.template.csv', 'supplier-inventory.template.csv'],
+  ['data/supplier-source-manifest.template.json', 'supplier-source-manifest.template.json']
+];
 
 export async function buildPages(options = {}) {
   const rootDir = resolve(options.rootDir || defaultRootDir);
@@ -21,6 +25,7 @@ export async function buildPages(options = {}) {
   await mkdir(publicDir, { recursive: true });
   await writeFile(resolve(publicDir, 'static-data.js'), staticData, 'utf8');
   await writeFile(resolve(publicDir, 'inventory-readiness.json'), `${JSON.stringify(readiness, null, 2)}\n`, 'utf8');
+  await copySupplierTemplates(rootDir, publicDir);
   await rm(docsDir, { recursive: true, force: true });
   await copyPublicDirectory(publicDir, docsDir);
   await writeFile(resolve(docsDir, '.nojekyll'), '', 'utf8');
@@ -144,6 +149,18 @@ async function copyPublicDirectory(sourceDir, targetDir) {
     } else if (entry.isFile()) {
       await mkdir(dirname(targetPath), { recursive: true });
       await writeFile(targetPath, await readFile(sourcePath));
+    }
+  }
+}
+
+async function copySupplierTemplates(rootDir, publicDir) {
+  for (const [sourcePath, targetName] of supplierTemplateFiles) {
+    try {
+      const content = await readFile(resolve(rootDir, sourcePath));
+      await writeFile(resolve(publicDir, targetName), content);
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
     }
   }
 }
