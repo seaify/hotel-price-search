@@ -1,5 +1,4 @@
-import { access, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { applyFilters, findCity, getNightCount } from '../hotel-data.js';
 
@@ -7,8 +6,10 @@ const defaultImage = 'https://images.unsplash.com/photo-1566073771259-6a85060999
 const maxImportBytes = 8 * 1024 * 1024;
 const defaultRemoteMaxBytes = 12 * 1024 * 1024;
 const defaultRemoteTimeoutMs = 8_000;
+const defaultInventoryCacheSeconds = 60;
 const allowedExtensions = new Set(['.csv', '.json']);
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
+const inventoryCache = new Map();
 const fieldAliases = {
   id: ['id', 'hotelId', 'hotel_id', '酒店ID', '酒店编号', '供应商酒店ID'],
   name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '名称'],
@@ -64,14 +65,24 @@ export function getRemoteInventoryUrls() {
     .filter(Boolean);
 }
 
+export function clearInventoryCache() {
+  inventoryCache.clear();
+}
+
 export async function getLocalInventoryStatus() {
   const importedFiles = await listImportedInventoryFiles();
   const remoteUrls = getRemoteInventoryUrls();
   const filePaths = unique([...getLocalInventoryPaths(), ...importedFiles.map((file) => file.filePath)]);
   const files = await Promise.all(filePaths.map(async (filePath) => {
     try {
-      await access(filePath, constants.R_OK);
-      return { filePath, readable: true };
+      const info = await stat(filePath);
+      return {
+        filePath,
+        readable: info.isFile(),
+        size: info.size,
+        updatedAt: info.mtime.toISOString(),
+        mtimeMs: info.mtimeMs
+      };
     } catch {
       return { filePath, readable: false };
     }
@@ -91,7 +102,8 @@ export async function getLocalInventoryStatus() {
       urlCount: remoteUrls.length,
       urls: remoteUrls.map(redactRemoteUrl),
       timeoutMs: getRemoteTimeoutMs(),
-      maxBytes: getRemoteMaxBytes()
+      maxBytes: getRemoteMaxBytes(),
+      cacheSeconds: getInventoryCacheSeconds()
     },
     importedCount: importedFiles.length,
     importsDir: getImportDir(),
@@ -214,12 +226,39 @@ function getImportDir() {
 }
 
 async function readInventoryFile(file) {
+  const cacheKey = `file:${file.filePath}`;
+  const cached = inventoryCache.get(cacheKey);
+  if (cached?.size === file.size && cached?.mtimeMs === file.mtimeMs) {
+    return { ...file, sourceLabel: file.filePath, rows: cached.rows, cache: 'hit' };
+  }
+
   const raw = await readFile(file.filePath, 'utf8');
   const rows = parseInventory(raw, extname(file.filePath).toLowerCase());
-  return { ...file, sourceLabel: file.filePath, rows };
+  inventoryCache.set(cacheKey, {
+    type: 'file',
+    size: file.size,
+    mtimeMs: file.mtimeMs,
+    rows,
+    cachedAt: Date.now()
+  });
+  return { ...file, sourceLabel: file.filePath, rows, cache: 'miss' };
 }
 
 async function readRemoteInventoryUrl(url) {
+  const cacheKey = `remote:${url}`;
+  const cached = inventoryCache.get(cacheKey);
+  const cacheTtlMs = getInventoryCacheSeconds() * 1000;
+  if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    return {
+      filePath: url,
+      sourceLabel: redactRemoteUrl(url),
+      readable: true,
+      rows: cached.rows,
+      cache: 'hit',
+      cachedAt: new Date(cached.cachedAt).toISOString()
+    };
+  }
+
   const response = await fetch(url, {
     headers: getRemoteInventoryHeaders(),
     signal: AbortSignal.timeout(getRemoteTimeoutMs())
@@ -245,8 +284,18 @@ async function readRemoteInventoryUrl(url) {
     filePath: url,
     sourceLabel: redactRemoteUrl(url),
     readable: true,
-    rows: parseInventory(raw, extension)
+    rows: cacheRemoteRows(cacheKey, parseInventory(raw, extension)),
+    cache: 'miss'
   };
+}
+
+function cacheRemoteRows(cacheKey, rows) {
+  inventoryCache.set(cacheKey, {
+    type: 'remote',
+    rows,
+    cachedAt: Date.now()
+  });
+  return rows;
 }
 
 function getRemoteInventoryHeaders() {
@@ -274,6 +323,10 @@ function getRemoteTimeoutMs() {
 
 function getRemoteMaxBytes() {
   return getPositiveInteger(process.env.HOTEL_DATA_URL_MAX_BYTES, defaultRemoteMaxBytes);
+}
+
+function getInventoryCacheSeconds() {
+  return getPositiveInteger(process.env.HOTEL_DATA_CACHE_SECONDS, defaultInventoryCacheSeconds);
 }
 
 function getPositiveInteger(value, fallback) {

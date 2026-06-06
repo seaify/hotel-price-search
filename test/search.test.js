@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { buildDemoHotels, cityCatalog } from '../server/hotel-data.js';
 import { createHotelServer, searchHotels } from '../server/index.js';
+import { clearInventoryCache } from '../server/providers/local-inventory.js';
 
 describe('hotel search data', () => {
   it('covers major cities nationwide', () => {
@@ -119,6 +120,84 @@ describe('hotel search data', () => {
       assert.equal(result.total, 1);
       assert.equal(result.hotels[0].name, '北京真实供应商酒店');
     } finally {
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes cached local inventory when the supplier file changes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-refresh-'));
+    const filePath = join(dir, 'prices.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    process.env.HOTEL_DATA_FILE = filePath;
+    clearInventoryCache();
+
+    try {
+      await writeFile(filePath, JSON.stringify([
+        {
+          id: 'refresh-001',
+          name: '南京刷新供应商酒店',
+          province: '江苏',
+          city: '南京',
+          district: '玄武',
+          price: 520,
+          checkIn: '2026-06-01',
+          checkOut: '2026-12-31',
+          available: true
+        }
+      ]));
+
+      const first = await searchHotels({
+        city: '南京',
+        keyword: '刷新供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(first.hotels[0].price, 520);
+
+      await writeFile(filePath, JSON.stringify([
+        {
+          id: 'refresh-001',
+          name: '南京刷新供应商酒店',
+          province: '江苏',
+          city: '南京',
+          district: '玄武',
+          price: 430,
+          source: '刷新后的供应商',
+          checkIn: '2026-06-01',
+          checkOut: '2026-12-31',
+          available: true
+        }
+      ]));
+
+      const second = await searchHotels({
+        city: '南京',
+        keyword: '刷新供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(second.hotels[0].price, 430);
+    } finally {
+      clearInventoryCache();
       if (previousFile === undefined) {
         delete process.env.HOTEL_DATA_FILE;
       } else {
@@ -338,18 +417,23 @@ describe('hotel search data', () => {
     const previousDataUrl = process.env.HOTEL_DATA_URL;
     const previousDataUrls = process.env.HOTEL_DATA_URLS;
     const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+    const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
 
     delete process.env.HOTEL_DATA_FILE;
     delete process.env.HOTEL_DATA_FILES;
     delete process.env.HOTEL_IMPORT_DIR;
     delete process.env.HOTEL_DATA_URLS;
     delete process.env.HOTEL_DATA_URL_HEADERS;
+    process.env.HOTEL_DATA_CACHE_SECONDS = '3600';
+    clearInventoryCache();
 
     const csv = [
       'id,name,province,city,district,address,star,rating,price,currency,tags,source,checkIn,checkOut,available,bookingUrl',
       'remote-001,深圳远程供应商酒店,广东,深圳,南山,深圳市南山区科技园 88 号,5,4.9,899,CNY,真实库存,远程供应商,2026-06-01,2026-12-31,true,https://example.com/remote-001'
     ].join('\n');
+    let requestCount = 0;
     const supplierServer = createHttpServer((request, response) => {
+      requestCount += 1;
       assert.ok(request.url.includes('token=secret-value'));
       response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8' });
       response.end(csv);
@@ -375,7 +459,95 @@ describe('hotel search data', () => {
       assert.equal(result.providers.localInventory.remoteCount, 1);
       assert.equal(result.providers.localInventory.readableCount, 1);
       assert.equal(result.providers.localInventory.remoteInventory.urls[0], `http://127.0.0.1:${address.port}/remote.csv?token=REDACTED`);
+
+      const cachedResult = await searchHotels({
+        city: '深圳',
+        keyword: '远程供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(cachedResult.total, 1);
+      assert.equal(requestCount, 1);
     } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousDataUrlHeaders === undefined) {
+        delete process.env.HOTEL_DATA_URL_HEADERS;
+      } else {
+        process.env.HOTEL_DATA_URL_HEADERS = previousDataUrlHeaders;
+      }
+      if (previousCacheSeconds === undefined) {
+        delete process.env.HOTEL_DATA_CACHE_SECONDS;
+      } else {
+        process.env.HOTEL_DATA_CACHE_SECONDS = previousCacheSeconds;
+      }
+    }
+  });
+
+  it('falls back to demo data when every remote supplier URL fails to load', async () => {
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_URL_HEADERS;
+    clearInventoryCache();
+
+    const supplierServer = createHttpServer((request, response) => {
+      response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ error: 'temporarily unavailable' }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+
+    process.env.HOTEL_DATA_URL = `http://127.0.0.1:${address.port}/remote.csv`;
+
+    try {
+      const result = await searchHotels({
+        city: '',
+        keyword: '近商圈',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'demo');
+      assert.ok(result.total > 20);
+      assert.equal(result.providers.localInventory.remoteCount, 1);
+      assert.equal(result.providers.localInventory.sourceErrors.length, 1);
+      assert.match(result.notice, /远程供应商文件读取失败|回退到备用数据源/);
+    } finally {
+      clearInventoryCache();
       await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
       if (previousFile === undefined) {
         delete process.env.HOTEL_DATA_FILE;

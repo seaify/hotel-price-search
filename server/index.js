@@ -89,30 +89,38 @@ export async function searchHotels(params) {
   const normalized = normalizeSearchParams(params);
   const providerEnabled = Boolean(process.env.AMADEUS_CLIENT_ID && process.env.AMADEUS_CLIENT_SECRET);
   const localStatus = await getLocalInventoryStatus();
+  let inventoryFallbackStatus = null;
+  let inventoryFailureNotice = '';
 
   if (localStatus.readable) {
     const localResults = await searchLocalInventory(normalized);
-    const page = paginateHotels(localResults.hotels, normalized);
-    const providers = await getProviderStatus();
-    providers.localInventory = localResults.status;
     const sourceErrors = localResults.status.sourceErrors || [];
-    const errorNotice = sourceErrors.length ? `${sourceErrors.length} 个远程供应商文件读取失败；` : '';
-    return {
-      source: 'local',
-      sourceLabel: '供应商真实库存',
-      mode: 'live-file',
-      generatedAt: new Date().toISOString(),
-      query: normalized,
-      total: page.total,
-      returned: page.hotels.length,
-      coverageCities: page.coverageCities,
-      pagination: page.pagination,
-      hotels: page.hotels,
-      notice: page.total
-        ? `价格来自 ${localResults.sourceCount} 个已接入的供应商库存源，已按同酒店合并并优先显示最低价。`
-        : `${errorNotice}${localStatus.readableCount} 个供应商库存源已接入，但当前条件没有可售酒店。`,
-      providers
-    };
+    const errorNotice = sourceErrors.length ? `${sourceErrors.length} 个远程供应商文件读取失败。` : '';
+
+    if (localResults.sourceCount > 0) {
+      const page = paginateHotels(localResults.hotels, normalized);
+      const providers = await getProviderStatus();
+      providers.localInventory = localResults.status;
+      return {
+        source: 'local',
+        sourceLabel: '供应商真实库存',
+        mode: 'live-file',
+        generatedAt: new Date().toISOString(),
+        query: normalized,
+        total: page.total,
+        returned: page.hotels.length,
+        coverageCities: page.coverageCities,
+        pagination: page.pagination,
+        hotels: page.hotels,
+        notice: page.total
+          ? `${errorNotice}价格来自 ${localResults.sourceCount} 个已接入的供应商库存源，已按同酒店合并并优先显示最低价。`
+          : `${errorNotice}${localStatus.readableCount} 个供应商库存源已接入，但当前条件没有可售酒店。`,
+        providers
+      };
+    }
+
+    inventoryFallbackStatus = localResults.status;
+    inventoryFailureNotice = errorNotice ? `${errorNotice} 当前已回退到备用数据源。` : '';
   }
 
   if (providerEnabled && normalized.city) {
@@ -120,6 +128,8 @@ export async function searchHotels(params) {
       const liveResults = await searchAmadeus(normalized);
       if (liveResults.hotels.length > 0) {
         const page = paginateHotels(liveResults.hotels, normalized);
+        const providers = await getProviderStatus();
+        if (inventoryFallbackStatus) providers.localInventory = inventoryFallbackStatus;
         return {
           source: 'amadeus',
           sourceLabel: 'Amadeus 实时价格',
@@ -131,8 +141,8 @@ export async function searchHotels(params) {
           coverageCities: page.coverageCities,
           pagination: page.pagination,
           hotels: page.hotels,
-          notice: '价格来自已配置的实时供应商接口，仍需在跳转预订前二次确认库存和政策。',
-          providers: await getProviderStatus()
+          notice: `${inventoryFailureNotice}价格来自已配置的实时供应商接口，仍需在跳转预订前二次确认库存和政策。`,
+          providers
         };
       }
     } catch (error) {
@@ -144,6 +154,8 @@ export async function searchHotels(params) {
     ? buildDemoHotels(normalized)
     : searchNationwideDemo(normalized);
   const page = paginateHotels(hotels, normalized);
+  const providers = await getProviderStatus();
+  if (inventoryFallbackStatus) providers.localInventory = inventoryFallbackStatus;
 
   return {
     source: 'demo',
@@ -157,9 +169,9 @@ export async function searchHotels(params) {
     pagination: page.pagination,
     hotels: page.hotels,
     notice: providerEnabled
-      ? '实时接口未返回可用结果，当前展示示例价格。'
-      : '当前未配置酒店供应商 API 或本地供应商文件，展示的是用于开发演示的全国示例价格；接入供应商后可查询真实价格。',
-    providers: await getProviderStatus()
+      ? `${inventoryFailureNotice}实时接口未返回可用结果，当前展示示例价格。`
+      : `${inventoryFailureNotice}当前未配置酒店供应商 API 或本地供应商文件，展示的是用于开发演示的全国示例价格；接入供应商后可查询真实价格。`,
+    providers
   };
 }
 
