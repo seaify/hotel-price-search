@@ -671,7 +671,7 @@ async function downloadCoverageReport() {
       const csv = await response.text();
       downloadTextFile('hotel-coverage.csv', csv, 'text/csv;charset=utf-8');
     } else {
-      const coverage = summarizeStaticInventoryCoverage(getCoverageQuery());
+      const coverage = getBestStaticCoverageForDashboard(getCoverageQuery(), getStaticProviderStatus());
       downloadTextFile('hotel-coverage.csv', buildCoverageCsv(coverage), 'text/csv;charset=utf-8');
     }
     elements.importStatus.textContent = '已下载覆盖缺口表';
@@ -683,7 +683,7 @@ async function downloadCoverageReport() {
 }
 
 function hasCoverageSource() {
-  return isStaticMode() ? state.staticInventoryRows.length > 0 : true;
+  return isStaticMode() ? state.staticInventoryRows.length > 0 || Boolean(summarizeRemoteInventoryManifestCoverage()) : true;
 }
 
 function getCoverageQuery() {
@@ -978,7 +978,7 @@ function renderProviderStatus(providers) {
     ${renderRemoteInventoryHealth(remoteHealth)}
     ${renderProviderErrorSummary(sourceErrors)}
   `;
-  elements.coverageDownloadButton.disabled = !localReady;
+  elements.coverageDownloadButton.disabled = !hasCoverageSource();
   elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : supplierApiReady ? '实时供应商 API 已配置' : apiReady ? 'Amadeus API 已配置' : '全国示例价格库';
 }
 
