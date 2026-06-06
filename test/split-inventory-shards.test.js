@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { auditInventoryCoverage } from '../scripts/audit-inventory-coverage.js';
@@ -52,4 +53,49 @@ describe('inventory shard splitter', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('loads a remote supplier CSV URL before writing city shards', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-remote-shards-'));
+    const inventoryServer = await startInventoryServer([
+      'id,name,province,city,source,price',
+      'bj-1,北京远程拆分酒店,北京,北京,远程供应商,588',
+      'sh-1,上海远程拆分酒店,上海,上海,远程供应商,688'
+    ].join('\n'));
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inventoryServer.url],
+        clean: true
+      });
+
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.equal(result.manifest.sources.length, 2);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('北京')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('上海')));
+    } finally {
+      await inventoryServer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
+
+async function startInventoryServer(content) {
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url, 'http://127.0.0.1');
+    if (requestUrl.pathname !== '/supplier.csv') {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8' });
+    response.end(content);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}/supplier.csv?signature=a,b;c`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}

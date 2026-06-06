@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { cityCatalog } from '../server/hotel-data.js';
@@ -14,8 +15,7 @@ describe('supplier inventory publisher', () => {
       await mkdir(join(root, 'public'), { recursive: true });
       await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
     });
-    const inputFile = join(root, 'supplier', 'nationwide.csv');
-    await writeFile(inputFile, [
+    const inventoryCsv = [
       'id,name,province,city,source,price,checkIn,checkOut,updatedAt',
       ...cityCatalog.map(({ province, city }, index) => [
         `hotel-${index + 1}`,
@@ -28,12 +28,13 @@ describe('supplier inventory publisher', () => {
         '2026-12-31',
         '2026-06-06T12:00:00Z'
       ].join(','))
-    ].join('\n'));
+    ].join('\n');
+    const inventoryServer = await startInventoryServer(inventoryCsv);
 
     try {
       const result = await publishSupplierInventory({
         rootDir: root,
-        inputFiles: [inputFile],
+        inputFiles: [inventoryServer.url],
         checkIn: '2026-06-06',
         checkOut: '2026-06-07',
         maxPriceAgeHours: 24,
@@ -48,6 +49,7 @@ describe('supplier inventory publisher', () => {
       assert.equal(manifest.sources.length, cityCatalog.length);
       assert.ok(manifest.sources.every((source) => source.pricedHotelCount >= 1));
     } finally {
+      await inventoryServer.close();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -76,3 +78,21 @@ describe('supplier inventory publisher', () => {
     }
   });
 });
+
+async function startInventoryServer(content) {
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url, 'http://127.0.0.1');
+    if (requestUrl.pathname !== '/supplier.csv') {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8' });
+    response.end(content);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}/supplier.csv?signature=a,b;c`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}

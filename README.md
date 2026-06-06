@@ -397,12 +397,13 @@ npm run build:pages
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
 ```
 
-如果供应商给的是一份全国大文件，可以先自动拆成按城市懒加载的 JSONL 分片：
+如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片：
 
 供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
 
 ```bash
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv
+npm run verify:supplier-inventory -- --input 'https://supplier.example.com/export/nationwide.csv?signature=...'
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z
 npm run publish:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z
 npm run split:inventory-shards -- --input /absolute/path/supplier-nationwide.csv --clean

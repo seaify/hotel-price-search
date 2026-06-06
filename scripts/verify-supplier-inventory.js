@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { auditInventoryCoverage } from './audit-inventory-coverage.js';
-import { splitInventoryShards } from './split-inventory-shards.js';
+import { isRemoteInventoryInput, normalizeInventoryInputReference, splitInventoryShards } from './split-inventory-shards.js';
 
 const defaultManifestPath = 'public/hotel-inventory.manifest.json';
 
 export async function verifySupplierInventory(options = {}) {
   const cwd = resolve(options.cwd || process.cwd());
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || [])
-    .map((inputFile) => resolve(cwd, inputFile));
+    .map((inputFile) => normalizeInventoryInputReference(inputFile, cwd));
   if (!inputFiles.length) throw new Error('At least one supplier inventory input file is required.');
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-'));
@@ -80,7 +80,10 @@ function buildNextCommands(inputFiles, options) {
 function normalizeInputFiles(value) {
   const values = Array.isArray(value) ? value : [value];
   return values
-    .flatMap((item) => String(item || '').split(/[,\n;]/))
+    .flatMap((item) => {
+      const text = String(item || '').trim();
+      return isRemoteInventoryInput(text) ? [text] : text.split(/[,\n;]/);
+    })
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -167,10 +170,10 @@ function formatCityList(cities) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/verify-supplier-inventory.js --input <file> [options]
+  console.log(`Usage: node scripts/verify-supplier-inventory.js --input <file-or-url> [options]
 
 Options:
-  --input <file>       Supplier inventory file. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL. Can be repeated or comma-separated
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
   --min-hotels-per-city N         Default: 1

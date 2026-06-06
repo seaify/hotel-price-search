@@ -20,8 +20,8 @@ export async function splitInventoryShards(options = {}) {
   let rowCount = 0;
 
   for (const inputFile of inputFiles) {
-    const inputPath = resolve(rootDir, inputFile);
-    const rows = parseInventory(await readFile(inputPath, 'utf8'), extname(inputPath).toLowerCase());
+    const input = await loadInventoryInput(inputFile, rootDir);
+    const rows = parseInventory(input.content, input.extension);
     rows.forEach((row, index) => {
       rowCount += 1;
       const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
@@ -74,10 +74,48 @@ export async function splitInventoryShards(options = {}) {
   };
 }
 
+async function loadInventoryInput(inputFile, rootDir) {
+  if (isRemoteInventoryInput(inputFile)) {
+    const response = await fetch(inputFile);
+    if (!response.ok) throw new Error(`Failed to fetch supplier inventory URL ${inputFile}: HTTP ${response.status}`);
+    const content = await response.text();
+    return {
+      content,
+      extension: getInputExtension(inputFile, response.headers.get('content-type') || '')
+    };
+  }
+  const inputPath = resolve(rootDir, inputFile);
+  return {
+    content: await readFile(inputPath, 'utf8'),
+    extension: getInputExtension(inputPath, '')
+  };
+}
+
+function getInputExtension(inputFile, contentType = '') {
+  const pathname = isRemoteInventoryInput(inputFile)
+    ? new URL(inputFile).pathname
+    : inputFile;
+  const extension = extname(pathname).toLowerCase();
+  if (extension) return extension;
+  if (contentType.includes('json')) return '.json';
+  return '.csv';
+}
+
+export function normalizeInventoryInputReference(inputFile, rootDir = process.cwd()) {
+  return isRemoteInventoryInput(inputFile) ? inputFile : resolve(rootDir, inputFile);
+}
+
+export function isRemoteInventoryInput(inputFile) {
+  return /^https?:\/\//i.test(String(inputFile || '').trim());
+}
+
 function normalizeInputFiles(value) {
   const values = Array.isArray(value) ? value : [value];
   return values
-    .flatMap((item) => String(item || '').split(/[,\n;]/))
+    .flatMap((item) => {
+      const text = String(item || '').trim();
+      return isRemoteInventoryInput(text) ? [text] : text.split(/[,\n;]/);
+    })
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -115,10 +153,10 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/split-inventory-shards.js --input <file> [options]
+  console.log(`Usage: node scripts/split-inventory-shards.js --input <file-or-url> [options]
 
 Options:
-  --input <file>      Supplier inventory file. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL. Can be repeated or comma-separated
   --output <dir>      Output shard directory. Default: public/inventory
   --manifest <file>   Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>    Optional absolute URL prefix for generated manifest source URLs

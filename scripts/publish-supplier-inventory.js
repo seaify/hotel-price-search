@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildPages } from './build-pages.js';
-import { splitInventoryShards } from './split-inventory-shards.js';
+import { isRemoteInventoryInput, normalizeInventoryInputReference, splitInventoryShards } from './split-inventory-shards.js';
 import { verifySupplierInventory } from './verify-supplier-inventory.js';
 
 const defaultOutputDir = 'public/inventory';
@@ -10,7 +10,7 @@ const defaultManifestPath = 'public/hotel-inventory.manifest.json';
 export async function publishSupplierInventory(options = {}) {
   const rootDir = resolve(options.rootDir || options.cwd || process.cwd());
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || [])
-    .map((inputFile) => resolve(rootDir, inputFile));
+    .map((inputFile) => normalizeInventoryInputReference(inputFile, rootDir));
   if (!inputFiles.length) throw new Error('At least one supplier inventory input file is required.');
 
   const gateOptions = getGateOptions(options);
@@ -84,7 +84,10 @@ function getGateOptions(options) {
 function normalizeInputFiles(value) {
   const values = Array.isArray(value) ? value : [value];
   return values
-    .flatMap((item) => String(item || '').split(/[,\n;]/))
+    .flatMap((item) => {
+      const text = String(item || '').trim();
+      return isRemoteInventoryInput(text) ? [text] : text.split(/[,\n;]/);
+    })
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -162,10 +165,10 @@ function formatCityList(cities) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/publish-supplier-inventory.js --input <file> [options]
+  console.log(`Usage: node scripts/publish-supplier-inventory.js --input <file-or-url> [options]
 
 Options:
-  --input <file>       Supplier inventory file. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL. Can be repeated or comma-separated
   --output <dir>       Output shard directory. Default: public/inventory
   --manifest <file>    Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>     Optional absolute URL prefix for generated manifest source URLs
