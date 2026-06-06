@@ -173,6 +173,21 @@ curl -OJ 'http://localhost:5174/api/supplier-destinations.csv'
 
 如果供应商只支持城市级查价，不支持全国或省级目的地，可以启用 `cityFanout`。查询全国或省份时系统会按城市拆成多次请求，再合并酒店结果；`cityFanoutConcurrency` 控制并发数，`cityFanoutLimit` 可限制一次扇出的城市数量。
 
+实时查价接口可启用短缓存，减少同一城市、日期、人数和分页条件的重复请求。默认 `0` 秒关闭；可用全局环境变量或单个源里的 `cacheSeconds` 开启：
+
+```bash
+export HOTEL_SUPPLIER_API_CACHE_SECONDS=30
+export HOTEL_SUPPLIER_API_CACHE_MAX_ENTRIES=1000
+```
+
+```json
+{
+  "name": "ctrip",
+  "url": "https://example.com/ctrip-live",
+  "cacheSeconds": 30
+}
+```
+
 供应商如果需要先换 access token，可以在单个源里配置 `auth`。`clientIdEnv` / `clientSecretEnv` 会从服务器环境变量读取密钥，token 会按 `expires_in` 缓存，并自动注入 `Authorization: Bearer ...`：
 
 ```json

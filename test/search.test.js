@@ -1377,6 +1377,97 @@ describe('hotel search data', () => {
     }
   });
 
+  it('caches identical live supplier API responses', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-response-cache-'));
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'HOTEL_SUPPLIER_API_CACHE_SECONDS',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    let requestCount = 0;
+    const supplierServer = createHttpServer((request, response) => {
+      requestCount += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: 'cache-live-001',
+            hotelName: '上海缓存实时供应商酒店',
+            province: '上海市',
+            city: '上海市',
+            price: 730,
+            source: '缓存供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '缓存供应商',
+      url: `http://127.0.0.1:${address.port}/cached-prices`,
+      method: 'GET',
+      cacheSeconds: 30
+    });
+
+    try {
+      const query = {
+        city: '上海',
+        keyword: '缓存实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      };
+      const first = await searchHotels(query);
+      const second = await searchHotels(query);
+
+      assert.equal(first.source, 'supplier-api');
+      assert.equal(second.source, 'supplier-api');
+      assert.equal(first.total, 1);
+      assert.equal(second.total, 1);
+      assert.equal(requestCount, 1);
+      assert.equal(first.providers.supplierApi.cacheConfigured, true);
+      assert.equal(first.providers.supplierApi.cacheMissCount, 1);
+      assert.equal(first.providers.supplierApi.cacheHitCount, 0);
+      assert.equal(second.providers.supplierApi.cacheMissCount, 0);
+      assert.equal(second.providers.supplierApi.cacheHitCount, 1);
+      assert.equal(second.hotels[0].name, '上海缓存实时供应商酒店');
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('fetches and caches client credentials tokens for live supplier APIs', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-auth-'));
     const envKeys = [

@@ -4,6 +4,8 @@ import { cityCatalog, normalizeDestinationInput, resolveDestination } from '../h
 import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
 const defaultSupplierApiTimeoutMs = 10_000;
+const defaultSupplierApiCacheSeconds = 0;
+const defaultSupplierApiCacheMaxEntries = 1000;
 const defaultSupplierCoverageProbeLimit = 1;
 const defaultSupplierCoverageProbeConcurrency = 4;
 const maxSupplierCoverageProbeConcurrency = 20;
@@ -11,6 +13,7 @@ const defaultSupplierDestinationMapCacheSeconds = 300;
 const defaultSupplierDestinationMapMaxBytes = 4 * 1024 * 1024;
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const supplierAuthCache = new Map();
+const supplierApiResponseCache = new Map();
 const supplierDestinationMapCache = new Map();
 
 export function getSupplierApiStatus() {
@@ -26,6 +29,9 @@ export function getSupplierApiStatus() {
     method: methods.length === 1 ? methods[0] : methods.length ? 'MIXED' : getSupplierApiMethod(),
     methods,
     timeoutMs: firstSource?.timeoutMs || getSupplierApiTimeoutMs(),
+    cacheSeconds: firstSource?.cacheSeconds ?? getSupplierApiCacheSeconds(),
+    cacheMaxEntries: getSupplierApiCacheMaxEntries(),
+    cacheConfigured: sources.some((source) => Number(source.cacheSeconds || 0) > 0),
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
     authConfigured: sources.some((source) => Boolean(source.auth)),
     cityFanoutConfigured: sources.some((source) => source.cityFanout),
@@ -69,7 +75,9 @@ export async function searchSupplierApiInventory(params) {
     sourceCount: loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0),
     sourceErrors,
     rowCount: rows.length,
-    fanoutRequestCount: loaded.reduce((sum, source) => sum + Number(source.fanoutRequestCount || 0), 0)
+    fanoutRequestCount: loaded.reduce((sum, source) => sum + Number(source.fanoutRequestCount || 0), 0),
+    cacheHitCount: loaded.reduce((sum, source) => sum + Number(source.cacheHitCount || 0), 0),
+    cacheMissCount: loaded.reduce((sum, source) => sum + Number(source.cacheMissCount || 0), 0)
   };
   const hotels = searchInventoryRows(rows, params, {
     source: 'supplier-api',
@@ -253,12 +261,32 @@ async function readSupplierApiSourceLoads(source, params) {
     pagination: null,
     sourceErrors,
     sourceCount: loaded.length,
-    fanoutRequestCount: cities.length
+    fanoutRequestCount: cities.length,
+    cacheHitCount: loaded.reduce((sum, item) => sum + Number(item.cacheHitCount || 0), 0),
+    cacheMissCount: loaded.reduce((sum, item) => sum + Number(item.cacheMissCount || 0), 0)
   };
 }
 
 async function readSupplierApiSource(source, params) {
   const { url, init } = await buildSupplierApiRequest(source, params);
+  const cacheSeconds = getSupplierApiSourceCacheSeconds(source);
+  const cacheKey = cacheSeconds > 0 ? buildSupplierApiCacheKey(source, url, init) : '';
+  if (cacheKey) {
+    const cached = supplierApiResponseCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < cacheSeconds * 1000) {
+      const parsed = cloneSupplierApiParsedResponse(cached.parsed);
+      return {
+        ...source,
+        rows: parsed.rows,
+        pagination: parsed.pagination,
+        cache: 'hit',
+        cacheHitCount: 1,
+        cacheMissCount: 0,
+        cachedAt: new Date(cached.cachedAt).toISOString()
+      };
+    }
+  }
+
   const response = await fetch(url, init);
   const text = await response.text();
   if (!response.ok) {
@@ -267,10 +295,16 @@ async function readSupplierApiSource(source, params) {
 
   const format = getSupplierApiResponseFormat(url, response.headers.get('content-type') || '');
   const parsed = parseSupplierApiResponse(text, format, source);
+  if (cacheKey) {
+    setSupplierApiResponseCache(cacheKey, parsed);
+  }
   return {
     ...source,
     rows: parsed.rows,
-    pagination: parsed.pagination
+    pagination: parsed.pagination,
+    cache: cacheKey ? 'miss' : 'disabled',
+    cacheHitCount: 0,
+    cacheMissCount: cacheKey ? 1 : 0
   };
 }
 
@@ -817,7 +851,8 @@ function getSupplierApiSources() {
     name: names[index] || names[0] || getSupplierApiName(),
     method,
     headers,
-    timeoutMs
+    timeoutMs,
+    cacheSeconds: getSupplierApiCacheSeconds()
   }));
   return [...configuredSources, ...envSources];
 }
@@ -834,6 +869,7 @@ function getSupplierApiConfigSources() {
       method: normalizeMethod(item.method || getSupplierApiMethod()),
       headers: normalizeHeaders(item.headers || {}),
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
+      cacheSeconds: getNonNegativeInteger(item.cacheSeconds ?? item.cacheTtlSeconds ?? item.responseCacheSeconds, getSupplierApiCacheSeconds()),
       auth: normalizeSupplierAuth(item.auth),
       cityFanout: parseBoolean(item.cityFanout ?? item.fanoutCities ?? item.destinationFanout, false),
       cityFanoutLimit: getPositiveInteger(item.cityFanoutLimit ?? item.fanoutLimit, 0),
@@ -1248,6 +1284,47 @@ function getSupplierApiHeaders() {
   return normalizeHeaders(process.env.HOTEL_SUPPLIER_API_HEADERS);
 }
 
+function getSupplierApiSourceCacheSeconds(source = {}) {
+  return getNonNegativeInteger(source.cacheSeconds, getSupplierApiCacheSeconds());
+}
+
+function getSupplierApiCacheSeconds() {
+  return getNonNegativeInteger(process.env.HOTEL_SUPPLIER_API_CACHE_SECONDS, defaultSupplierApiCacheSeconds);
+}
+
+function buildSupplierApiCacheKey(source, url, init) {
+  return [
+    'supplier-api',
+    source.name,
+    init.method || 'GET',
+    url.toString(),
+    init.body || ''
+  ].join('|');
+}
+
+function setSupplierApiResponseCache(cacheKey, parsed) {
+  supplierApiResponseCache.set(cacheKey, {
+    parsed: cloneSupplierApiParsedResponse(parsed),
+    cachedAt: Date.now()
+  });
+  const maxEntries = getSupplierApiCacheMaxEntries();
+  while (supplierApiResponseCache.size > maxEntries) {
+    const oldestKey = supplierApiResponseCache.keys().next().value;
+    supplierApiResponseCache.delete(oldestKey);
+  }
+}
+
+function getSupplierApiCacheMaxEntries() {
+  return getPositiveInteger(process.env.HOTEL_SUPPLIER_API_CACHE_MAX_ENTRIES, defaultSupplierApiCacheMaxEntries);
+}
+
+function cloneSupplierApiParsedResponse(parsed) {
+  return JSON.parse(JSON.stringify({
+    rows: parsed?.rows || [],
+    pagination: parsed?.pagination || null
+  }));
+}
+
 function normalizeMethod(value) {
   const method = String(value || 'GET').trim().toUpperCase();
   return method === 'POST' ? 'POST' : 'GET';
@@ -1275,6 +1352,11 @@ function getSupplierApiTimeoutMs() {
 function getPositiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function getNonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : fallback;
 }
 
 function getSupplierApiResponseFormat(url, contentType) {
