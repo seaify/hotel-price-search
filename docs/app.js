@@ -441,9 +441,11 @@ function renderRates(container, hotel) {
 
 function renderProviderStatus(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
+  const remoteCount = Number(providers?.localInventory?.remoteCount || 0);
   const apiReady = Boolean(providers?.amadeus?.configured);
   const rows = [
-    ['本地真实库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
+    ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
+    ['远程供应商文件', remoteCount ? `${remoteCount} 源` : '未接入', remoteCount ? 'on' : ''],
     ['实时 API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
     ['示例价格库', `${providers?.demo?.cities || state.cities.length} 城`, 'demo']
   ];
@@ -457,7 +459,7 @@ function renderProviderStatus(providers) {
       </div>
     `).join('')}
   `;
-  elements.sourcePill.textContent = localReady ? '本地真实库存已接入' : apiReady ? '实时 API 已配置' : '全国示例价格库';
+  elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : apiReady ? '实时 API 已配置' : '全国示例价格库';
 }
 
 function getSourceText(source) {

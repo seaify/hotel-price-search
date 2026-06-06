@@ -27,6 +27,21 @@ npm start
 
 多个文件里同一家酒店会合并成一张酒店卡，页面显示最低价和报价源数量。
 
+也可以接远程供应商导出 URL，适合把携程、美团、飞猪、同程、渠道管理系统或自有合同库存定时导出到对象存储、内网接口、签名 URL：
+
+```bash
+export HOTEL_DATA_URL=https://example.com/hotel-prices.csv
+npm start
+```
+
+```bash
+export HOTEL_DATA_URLS=https://example.com/ctrip.csv,https://example.com/meituan.json
+export HOTEL_DATA_URL_HEADERS='{"Authorization":"Bearer your_token"}'
+npm start
+```
+
+远程 URL 使用和本地 CSV/JSON 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。
+
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。核心字段是：
 
 ```text

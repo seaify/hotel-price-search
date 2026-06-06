@@ -5,7 +5,10 @@ import { applyFilters, findCity, getNightCount } from '../hotel-data.js';
 
 const defaultImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80';
 const maxImportBytes = 8 * 1024 * 1024;
+const defaultRemoteMaxBytes = 12 * 1024 * 1024;
+const defaultRemoteTimeoutMs = 8_000;
 const allowedExtensions = new Set(['.csv', '.json']);
+const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const fieldAliases = {
   id: ['id', 'hotelId', 'hotel_id', '酒店ID', '酒店编号', '供应商酒店ID'],
   name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '名称'],
@@ -50,8 +53,20 @@ export function getLocalInventoryPaths() {
   return (configured.length ? configured : ['data/hotel-prices.json']).map((filePath) => resolve(filePath));
 }
 
+export function getRemoteInventoryUrls() {
+  return [
+    process.env.HOTEL_DATA_URLS,
+    process.env.HOTEL_DATA_URL
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(/[\n,;]/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 export async function getLocalInventoryStatus() {
   const importedFiles = await listImportedInventoryFiles();
+  const remoteUrls = getRemoteInventoryUrls();
   const filePaths = unique([...getLocalInventoryPaths(), ...importedFiles.map((file) => file.filePath)]);
   const files = await Promise.all(filePaths.map(async (filePath) => {
     try {
@@ -64,12 +79,20 @@ export async function getLocalInventoryStatus() {
   const readableFiles = files.filter((file) => file.readable);
 
   return {
-    configured: Boolean(process.env.HOTEL_DATA_FILE || process.env.HOTEL_DATA_FILES || importedFiles.length),
-    readable: readableFiles.length > 0,
+    configured: Boolean(process.env.HOTEL_DATA_FILE || process.env.HOTEL_DATA_FILES || remoteUrls.length || importedFiles.length),
+    readable: readableFiles.length > 0 || remoteUrls.length > 0,
     filePath: filePaths[0],
     filePaths,
     fileCount: filePaths.length,
-    readableCount: readableFiles.length,
+    readableCount: readableFiles.length + remoteUrls.length,
+    remoteCount: remoteUrls.length,
+    remoteInventory: {
+      configured: remoteUrls.length > 0,
+      urlCount: remoteUrls.length,
+      urls: remoteUrls.map(redactRemoteUrl),
+      timeoutMs: getRemoteTimeoutMs(),
+      maxBytes: getRemoteMaxBytes()
+    },
     importedCount: importedFiles.length,
     importsDir: getImportDir(),
     importedFiles,
@@ -141,15 +164,19 @@ export async function searchLocalInventory(params) {
   }
 
   const readableFiles = status.files.filter((file) => file.readable);
-  const loaded = await Promise.all(readableFiles.map(async (file) => {
-    const raw = await readFile(file.filePath, 'utf8');
-    const rows = parseInventory(raw, extname(file.filePath).toLowerCase());
-    return { ...file, rows };
-  }));
+  const loadedFiles = await Promise.all(readableFiles.map(readInventoryFile));
+  const remoteLoads = await Promise.allSettled(getRemoteInventoryUrls().map(readRemoteInventoryUrl));
+  const loadedRemote = remoteLoads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = remoteLoads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '远程供应商文件读取失败。');
+  const loaded = [...loadedFiles, ...loadedRemote];
   const rows = loaded.flatMap((file) =>
     file.rows.map((row) => ({
       ...row,
-      __inventoryFile: file.filePath
+      __inventoryFile: file.sourceLabel || file.filePath
     }))
   );
   const nights = getNightCount(params.checkIn, params.checkOut);
@@ -160,9 +187,9 @@ export async function searchLocalInventory(params) {
 
   return {
     hotels: applyFilters(merged, params),
-    status,
+    status: { ...status, sourceErrors },
     rowCount: rows.length,
-    sourceCount: readableFiles.length
+    sourceCount: loaded.length
   };
 }
 
@@ -184,6 +211,92 @@ function sanitizeImportFilename(filename) {
 
 function getImportDir() {
   return resolve(process.env.HOTEL_IMPORT_DIR || 'data/imports');
+}
+
+async function readInventoryFile(file) {
+  const raw = await readFile(file.filePath, 'utf8');
+  const rows = parseInventory(raw, extname(file.filePath).toLowerCase());
+  return { ...file, sourceLabel: file.filePath, rows };
+}
+
+async function readRemoteInventoryUrl(url) {
+  const response = await fetch(url, {
+    headers: getRemoteInventoryHeaders(),
+    signal: AbortSignal.timeout(getRemoteTimeoutMs())
+  });
+  if (!response.ok) {
+    throw new Error(`${redactRemoteUrl(url)} 返回 HTTP ${response.status}`);
+  }
+
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  const maxBytes = getRemoteMaxBytes();
+  if (contentLength > maxBytes) {
+    throw new Error(`${redactRemoteUrl(url)} 文件超过 ${formatBytes(maxBytes)} 限制。`);
+  }
+
+  const raw = await response.text();
+  if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
+    throw new Error(`${redactRemoteUrl(url)} 文件超过 ${formatBytes(maxBytes)} 限制。`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  const extension = getRemoteInventoryExtension(url, contentType);
+  return {
+    filePath: url,
+    sourceLabel: redactRemoteUrl(url),
+    readable: true,
+    rows: parseInventory(raw, extension)
+  };
+}
+
+function getRemoteInventoryHeaders() {
+  if (!process.env.HOTEL_DATA_URL_HEADERS) return {};
+  const parsed = JSON.parse(process.env.HOTEL_DATA_URL_HEADERS);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error('HOTEL_DATA_URL_HEADERS 必须是 JSON 对象。');
+  }
+  return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
+}
+
+function getRemoteInventoryExtension(url, contentType) {
+  try {
+    const extension = extname(new URL(url).pathname).toLowerCase();
+    if (allowedExtensions.has(extension)) return extension;
+  } catch {
+    // Fall back to content type below.
+  }
+  return contentType.toLowerCase().includes('csv') ? '.csv' : '.json';
+}
+
+function getRemoteTimeoutMs() {
+  return getPositiveInteger(process.env.HOTEL_DATA_URL_TIMEOUT_MS, defaultRemoteTimeoutMs);
+}
+
+function getRemoteMaxBytes() {
+  return getPositiveInteger(process.env.HOTEL_DATA_URL_MAX_BYTES, defaultRemoteMaxBytes);
+}
+
+function getPositiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
+}
+
+function redactRemoteUrl(value) {
+  try {
+    const url = new URL(value);
+    for (const key of [...url.searchParams.keys()]) {
+      if (sensitiveQueryPattern.test(key)) {
+        url.searchParams.set(key, 'REDACTED');
+      }
+    }
+    return url.toString();
+  } catch {
+    return String(value);
+  }
+}
+
+function formatBytes(bytes) {
+  return `${Math.round(bytes / 1024 / 1024)}MB`;
 }
 
 function normalizeHotel(row, index, nights) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer as createHttpServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -327,6 +328,85 @@ describe('hotel search data', () => {
         process.env.HOTEL_IMPORT_DIR = previousImportDir;
       }
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads a remote supplier CSV URL as searchable real inventory', async () => {
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_URL_HEADERS;
+
+    const csv = [
+      'id,name,province,city,district,address,star,rating,price,currency,tags,source,checkIn,checkOut,available,bookingUrl',
+      'remote-001,深圳远程供应商酒店,广东,深圳,南山,深圳市南山区科技园 88 号,5,4.9,899,CNY,真实库存,远程供应商,2026-06-01,2026-12-31,true,https://example.com/remote-001'
+    ].join('\n');
+    const supplierServer = createHttpServer((request, response) => {
+      assert.ok(request.url.includes('token=secret-value'));
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8' });
+      response.end(csv);
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+
+    process.env.HOTEL_DATA_URL = `http://127.0.0.1:${address.port}/remote.csv?token=secret-value`;
+
+    try {
+      const result = await searchHotels({
+        city: '深圳',
+        keyword: '远程供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '深圳远程供应商酒店');
+      assert.equal(result.hotels[0].price, 899);
+      assert.equal(result.hotels[0].providerName, '远程供应商');
+      assert.equal(result.providers.localInventory.remoteCount, 1);
+      assert.equal(result.providers.localInventory.readableCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.urls[0], `http://127.0.0.1:${address.port}/remote.csv?token=REDACTED`);
+    } finally {
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousDataUrlHeaders === undefined) {
+        delete process.env.HOTEL_DATA_URL_HEADERS;
+      } else {
+        process.env.HOTEL_DATA_URL_HEADERS = previousDataUrlHeaders;
+      }
     }
   });
 });

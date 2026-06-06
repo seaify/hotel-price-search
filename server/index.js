@@ -93,9 +93,13 @@ export async function searchHotels(params) {
   if (localStatus.readable) {
     const localResults = await searchLocalInventory(normalized);
     const page = paginateHotels(localResults.hotels, normalized);
+    const providers = await getProviderStatus();
+    providers.localInventory = localResults.status;
+    const sourceErrors = localResults.status.sourceErrors || [];
+    const errorNotice = sourceErrors.length ? `${sourceErrors.length} 个远程供应商文件读取失败；` : '';
     return {
       source: 'local',
-      sourceLabel: '本地真实库存',
+      sourceLabel: '供应商真实库存',
       mode: 'live-file',
       generatedAt: new Date().toISOString(),
       query: normalized,
@@ -105,9 +109,9 @@ export async function searchHotels(params) {
       pagination: page.pagination,
       hotels: page.hotels,
       notice: page.total
-        ? `价格来自 ${localStatus.readableCount} 个已接入的本地供应商文件，已按同酒店合并并优先显示最低价。`
-        : `${localStatus.readableCount} 个本地供应商文件已接入，但当前条件没有可售酒店。`,
-      providers: await getProviderStatus()
+        ? `价格来自 ${localResults.sourceCount} 个已接入的供应商库存源，已按同酒店合并并优先显示最低价。`
+        : `${errorNotice}${localStatus.readableCount} 个供应商库存源已接入，但当前条件没有可售酒店。`,
+      providers
     };
   }
 
