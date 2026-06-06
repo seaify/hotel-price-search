@@ -81,6 +81,7 @@ const elements = {
   sourcePill: document.querySelector('#sourcePill'),
   cityCount: document.querySelector('#cityCount'),
   providerStatus: document.querySelector('#providerStatus'),
+  coverageDashboard: document.querySelector('#coverageDashboard'),
   inventoryFileInput: document.querySelector('#inventoryFileInput'),
   importButton: document.querySelector('#importButton'),
   coverageDownloadButton: document.querySelector('#coverageDownloadButton'),
@@ -189,9 +190,9 @@ async function loadCities() {
 async function loadProviderStatus() {
   try {
     const data = isStaticMode() ? getStaticProviderStatus() : await fetchJson('/api/status');
-    renderProviderStatus(data);
+    await syncProviderPanels(data);
   } catch {
-    renderProviderStatus(getStaticProviderStatus());
+    await syncProviderPanels(getStaticProviderStatus());
   }
 }
 
@@ -218,7 +219,7 @@ async function importInventoryFile() {
       if (error.status && ![404, 405, 501].includes(error.status)) throw error;
       data = importStaticInventoryFile(file.name, content);
     }
-    renderProviderStatus(data.providers);
+    await syncProviderPanels(data.providers);
     elements.importStatus.textContent = `已导入 ${data.imported.rowCount} 条`;
     elements.inventoryFileInput.value = '';
     await runSearch();
@@ -287,7 +288,7 @@ async function runSearch(options = {}) {
       data = searchStaticHotels(query);
     }
     renderResults(data, { append });
-    if (data.providers) renderProviderStatus(data.providers);
+    if (data.providers) await syncProviderPanels(data.providers);
   } catch (error) {
     elements.notice.hidden = false;
     elements.notice.textContent = '搜索失败，请确认服务正在运行后重试。';
@@ -509,6 +510,89 @@ function renderProviderStatus(providers) {
   `;
   elements.coverageDownloadButton.disabled = !localReady;
   elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : supplierApiReady ? '实时供应商 API 已配置' : apiReady ? 'Amadeus API 已配置' : '全国示例价格库';
+}
+
+async function syncProviderPanels(providers) {
+  renderProviderStatus(providers);
+  await refreshCoverageDashboard(providers);
+}
+
+async function refreshCoverageDashboard(providers) {
+  const localReady = Boolean(providers?.localInventory?.readable);
+  if (!localReady) {
+    renderCoverageDashboard(null);
+    return;
+  }
+
+  try {
+    const coverage = isStaticMode()
+      ? summarizeStaticInventoryCoverage(getCoverageQuery())
+      : await fetchJson(`/api/coverage?${new URLSearchParams(getCoverageQuery())}`);
+    renderCoverageDashboard(coverage);
+  } catch {
+    renderCoverageDashboard(providers?.localInventory?.coverage || null);
+  }
+}
+
+function renderCoverageDashboard(coverage) {
+  if (!elements.coverageDashboard) return;
+  if (!coverage || !Number(coverage.totalCities)) {
+    elements.coverageDashboard.hidden = true;
+    elements.coverageDashboard.innerHTML = '';
+    return;
+  }
+
+  const coveredCities = Number(coverage.coveredCities || 0);
+  const totalCities = Number(coverage.totalCities || 0);
+  const ratio = totalCities ? coveredCities / totalCities : Number(coverage.coverageRatio || 0);
+  const missingCities = (coverage.missingCities || []).slice(0, 8);
+  const sourceCoverage = (coverage.sourceCoverage || []).slice(0, 4);
+  const dateLabel = coverage.query?.checkIn && coverage.query?.checkOut
+    ? `${coverage.query.checkIn} 至 ${coverage.query.checkOut}`
+    : '全部日期';
+
+  elements.coverageDashboard.hidden = false;
+  elements.coverageDashboard.innerHTML = `
+    <div class="coverage-dashboard-heading">
+      <strong>真实库存覆盖</strong>
+      <span>${escapeHtml(dateLabel)}</span>
+    </div>
+    <div class="coverage-meter" aria-label="真实库存城市覆盖率">
+      <div style="width: ${escapeAttribute(formatCoverageWidth(ratio))}"></div>
+    </div>
+    <div class="coverage-summary">
+      <div>
+        <b>${escapeHtml(formatCoveragePercent(ratio))}</b>
+        <span>${escapeHtml(`${coveredCities}/${totalCities} 城`)}</span>
+      </div>
+      <div>
+        <b>${escapeHtml(formatNumber(coverage.hotelCount || 0))}</b>
+        <span>真实酒店</span>
+      </div>
+      <div>
+        <b>${escapeHtml(formatNumber(coverage.rowCount || 0))}</b>
+        <span>报价行</span>
+      </div>
+    </div>
+    ${sourceCoverage.length ? `
+      <div class="coverage-source-list">
+        ${sourceCoverage.map((source) => `
+          <div class="coverage-source-row">
+            <span>${escapeHtml(source.sourceName || '供应商')}</span>
+            <b>${escapeHtml(`${source.coveredCities || 0} 城 · ${source.hotelCount || 0} 酒店`)}</b>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+    ${missingCities.length ? `
+      <div class="coverage-missing">
+        <span>缺口城市</span>
+        <div>
+          ${missingCities.map((city) => `<i>${escapeHtml(`${city.province} · ${city.city}`)}</i>`).join('')}
+        </div>
+      </div>
+    ` : ''}
+  `;
 }
 
 function getSourceText(source) {
@@ -1198,6 +1282,17 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatCoveragePercent(value) {
+  const percent = Math.max(0, Math.min(100, Number(value || 0) * 100));
+  const rounded = percent >= 10 ? Math.round(percent) : Math.round(percent * 10) / 10;
+  return `${rounded}%`;
+}
+
+function formatCoverageWidth(value) {
+  const percent = Math.max(0, Math.min(100, Number(value || 0) * 100));
+  return `${percent}%`;
 }
 
 function buildCoverageCsv(coverage) {

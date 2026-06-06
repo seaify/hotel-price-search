@@ -272,6 +272,106 @@ select:focus {
   background: rgba(11, 122, 117, 0.06);
 }
 
+.coverage-dashboard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(31, 74, 122, 0.22);
+  border-radius: 8px;
+  background: rgba(31, 74, 122, 0.06);
+}
+
+.coverage-dashboard[hidden] {
+  display: none;
+}
+
+.coverage-dashboard-heading,
+.coverage-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.coverage-dashboard-heading span,
+.coverage-source-row span,
+.coverage-source-row b,
+.coverage-missing span,
+.coverage-missing i,
+.coverage-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.coverage-dashboard-heading strong {
+  font-size: 14px;
+}
+
+.coverage-meter {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(31, 74, 122, 0.12);
+}
+
+.coverage-meter div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), var(--gold));
+}
+
+.coverage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.coverage-summary div {
+  padding: 10px;
+  border: 1px solid rgba(31, 74, 122, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.coverage-summary b,
+.coverage-summary span {
+  display: block;
+}
+
+.coverage-summary b {
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.coverage-source-list {
+  display: grid;
+  gap: 8px;
+}
+
+.coverage-source-row b {
+  white-space: nowrap;
+}
+
+.coverage-missing {
+  display: grid;
+  gap: 8px;
+}
+
+.coverage-missing div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.coverage-missing i {
+  padding: 4px 7px;
+  border: 1px solid rgba(31, 74, 122, 0.12);
+  border-radius: 999px;
+  font-style: normal;
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .import-panel {
   display: grid;
   gap: 10px;
@@ -731,6 +831,7 @@ select:focus {
   .filter-heading,
   .coverage,
   .provider-status,
+  .coverage-dashboard,
   .import-panel {
     grid-column: 1 / -1;
   }
@@ -758,6 +859,7 @@ select:focus {
   .filter-heading,
   .coverage,
   .provider-status,
+  .coverage-dashboard,
   .import-panel {
     grid-column: auto;
   }
