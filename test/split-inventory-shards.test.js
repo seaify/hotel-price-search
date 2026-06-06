@@ -189,6 +189,91 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('loads local XLSX supplier workbooks before writing city shards', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-xlsx-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide.xlsx');
+    await writeFile(inputFile, buildXlsxWorkbook([
+      ['id', 'name', 'province', 'city', 'source', 'price'],
+      ['bj-xlsx-1', '北京Excel拆分酒店', '北京', '北京', 'Excel供应商', '588'],
+      ['sh-xlsx-1', '上海Excel拆分酒店', '上海', '上海', 'Excel供应商', '688']
+    ], { worksheetTarget: '/xl/worksheets/sheet1.xml' }));
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('北京')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('上海')));
+      assert.ok(result.manifest.sources.every((source) => source.pricedHotelCount === 1));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads remote XLSX supplier URLs by spreadsheet content type', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-remote-xlsx-shards-'));
+    const workbook = buildXlsxWorkbook([
+      ['id', 'name', 'province', 'city', 'source', 'price'],
+      ['xa-remote-xlsx-1', '西安远程Excel酒店', '陕西', '西安', '远程Excel供应商', '588'],
+      ['cs-remote-xlsx-1', '长沙远程Excel酒店', '湖南', '长沙', '远程Excel供应商', '688']
+    ]);
+    const inventoryServer = await startInventoryServer(workbook, {
+      path: '/supplier-export',
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inventoryServer.url],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('西安')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('长沙')));
+    } finally {
+      await inventoryServer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads XLSX supplier workbooks inside ZIP archives', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-zip-xlsx-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'supplier-exports.zip');
+    const archive = buildZipArchive({
+      'exports/nationwide.xlsx': buildXlsxWorkbook([
+        ['id', 'name', 'province', 'city', 'source', 'price'],
+        ['cd-xlsx-zip-1', '成都ZIP Excel酒店', '四川', '成都', 'ZIP Excel供应商', '588'],
+        ['wh-xlsx-zip-1', '武汉ZIP Excel酒店', '湖北', '武汉', 'ZIP Excel供应商', '688']
+      ]),
+      'README.txt': 'not inventory'
+    });
+    await writeFile(inputFile, archive);
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('成都')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('武汉')));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('maps non-standard supplier fields before writing city shards', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-field-map-shards-'));
     await mkdir(join(root, 'supplier'), { recursive: true });
@@ -463,4 +548,89 @@ function buildZipArchive(entries) {
   end.writeUInt16LE(0, 20);
 
   return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
+function buildXlsxWorkbook(rows, options = {}) {
+  const sharedStrings = [];
+  const sharedStringIndexes = new Map();
+  const sheetRows = rows.map((row, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    const cells = row.map((value, columnIndex) => {
+      const text = String(value ?? '');
+      const sharedStringIndex = getSharedStringIndex(text, sharedStrings, sharedStringIndexes);
+      return `<c r="${formatCellReference(columnIndex, rowNumber)}" t="s"><v>${sharedStringIndex}</v></c>`;
+    }).join('');
+    return `<row r="${rowNumber}">${cells}</row>`;
+  }).join('');
+
+  return buildZipArchive({
+    '[Content_Types].xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '<Default Extension="xml" ContentType="application/xml"/>',
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
+      '</Types>'
+    ].join(''),
+    '_rels/.rels': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>',
+      '</Relationships>'
+    ].join(''),
+    'xl/workbook.xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+      '</workbook>'
+    ].join(''),
+    'xl/_rels/workbook.xml.rels': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${escapeXml(options.worksheetTarget || 'worksheets/sheet1.xml')}"/>`,
+      '</Relationships>'
+    ].join(''),
+    'xl/sharedStrings.xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${rows.flat().length}" uniqueCount="${sharedStrings.length}">`,
+      sharedStrings.map((value) => `<si><t>${escapeXml(value)}</t></si>`).join(''),
+      '</sst>'
+    ].join(''),
+    'xl/worksheets/sheet1.xml': [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+      `<sheetData>${sheetRows}</sheetData>`,
+      '</worksheet>'
+    ].join('')
+  });
+}
+
+function getSharedStringIndex(value, sharedStrings, sharedStringIndexes) {
+  if (!sharedStringIndexes.has(value)) {
+    sharedStringIndexes.set(value, sharedStrings.length);
+    sharedStrings.push(value);
+  }
+  return sharedStringIndexes.get(value);
+}
+
+function formatCellReference(columnIndex, rowNumber) {
+  let index = columnIndex + 1;
+  let letters = '';
+  while (index > 0) {
+    const remainder = (index - 1) % 26;
+    letters = String.fromCharCode(65 + remainder) + letters;
+    index = Math.floor((index - 1) / 26);
+  }
+  return `${letters}${rowNumber}`;
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }

@@ -387,7 +387,7 @@ npm run build:pages
 
 仓库也内置了 `.github/workflows/publish-supplier-inventory.yml`，可以在 GitHub Actions 里手动触发或每天自动刷新供应商库存。如果供应商给的是允许公开访问或带签名的临时 URL，可以直接打开 Actions -> Publish supplier inventory -> Run workflow，在 `supplier_inventory_inputs` 里粘贴一个或多个导出 URL，或在 `supplier_source_manifest_url` 里粘贴多源清单 URL；同一表单还可以临时填写 `supplier_field_map_json`、入住日期和每城/全国最低库存门槛。需要私密鉴权头或长期定时刷新时，再在仓库 Settings -> Secrets and variables -> Actions 里配置：
 
-- Secret `HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON`：供应商导出 URL 或文件路径数组，例如 `["https://supplier.example.com/nationwide.jsonl.gz?signature=..."]`，也可以是包含多份 CSV/JSON/JSONL/NDJSON 的 `.zip` 导出包 URL
+- Secret `HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON`：供应商导出 URL 或文件路径数组，例如 `["https://supplier.example.com/nationwide.jsonl.gz?signature=..."]`，也可以是 `.xlsx` 导出表，或包含多份 CSV/JSON/JSONL/NDJSON/XLSX 的 `.zip` 导出包 URL
 - Secret `HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON`：可选，受保护导出 URL 的请求头，例如 `{"Authorization":"Bearer token","X-Api-Key":"key"}`
 - Secret `HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON`：可选，多供应商清单，格式同 Node 版 `HOTEL_DATA_MANIFEST_CONFIG`，每个 `source` 可独立配置 `url`、`headers`、`fieldMap`
 - Secret `HOTEL_SUPPLIER_FIELD_MAP_JSON`：可选，供应商字段映射 JSON，例如 `{"id":"offer.id","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.sale"}`
@@ -409,7 +409,7 @@ npm run build:pages
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
 ```
 
-如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片。输入支持 CSV/JSON/JSONL/NDJSON，也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`；如果供应商给的是 ZIP 包，包内可以放多份 CSV/JSON/JSONL/NDJSON，发布脚本会自动展开并合并拆分：
+如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片。输入支持 CSV/JSON/JSONL/NDJSON/XLSX，也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz`；如果供应商给的是 ZIP 包，包内可以放多份 CSV/JSON/JSONL/NDJSON/XLSX，发布脚本会自动展开并合并拆分：
 
 供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
 

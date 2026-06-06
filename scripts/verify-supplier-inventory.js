@@ -285,7 +285,7 @@ function printHelp() {
   console.log(`Usage: node scripts/verify-supplier-inventory.js --input <file-or-url> [options]
 
 Options:
-  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz or a .zip archive. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON/XLSX, optionally .gz or a .zip archive. Can be repeated or comma-separated
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
   --field-map <json-or-file> Map non-standard supplier fields to internal fields

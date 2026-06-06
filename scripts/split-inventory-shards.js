@@ -3,11 +3,12 @@ import { dirname, extname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { buildInventoryManifest, normalizeInventoryLocation, parseInventory, pick, sortChinese } from './build-inventory-manifest.js';
+import { parseXlsxInventory } from './xlsx-inventory.js';
 import { extractZipEntries, isZipBuffer } from './zip-archive.js';
 
 const defaultOutputDir = 'public/inventory';
 const defaultManifestPath = 'public/hotel-inventory.manifest.json';
-const supportedInventoryExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
+const supportedInventoryExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.xlsx']);
 
 export async function splitInventoryShards(options = {}) {
   const rootDir = resolve(options.rootDir || process.cwd());
@@ -31,7 +32,7 @@ export async function splitInventoryShards(options = {}) {
   for (const source of inventorySources) {
     const inputs = await loadInventoryInputs(source.inputFile, rootDir, source.requestHeaders);
     for (const input of inputs) {
-      const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, source.fieldMap));
+      const rows = getInventoryRows(input).map((row) => mapInventoryRow(row, source.fieldMap));
       rows.forEach((row, index) => {
         rowCount += 1;
         const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
@@ -253,6 +254,10 @@ function getPathValue(value, path) {
   }, value);
 }
 
+function getInventoryRows(input) {
+  return Array.isArray(input.rows) ? input.rows : parseInventory(input.content, input.extension);
+}
+
 async function loadInventoryInputs(inputFile, rootDir, requestHeaders = {}) {
   if (isRemoteInventoryInput(inputFile)) {
     const response = await fetch(inputFile, { headers: requestHeaders });
@@ -272,12 +277,13 @@ function getInputFormat(inputFile, contentType = '') {
     ? new URL(inputFile).pathname
     : String(inputFile || '');
   const lowerPath = pathname.toLowerCase();
-  for (const format of ['.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']) {
+  for (const format of ['.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz', '.xlsx.gz', '.zip.gz']) {
     if (lowerPath.endsWith(format)) return format;
   }
   const extension = extname(lowerPath).toLowerCase();
   if (extension) return extension;
   const lowerType = contentType.toLowerCase();
+  if (lowerType.includes('spreadsheetml.sheet')) return '.xlsx';
   if (lowerType.includes('zip')) return '.zip';
   if (lowerType.includes('ndjson')) return '.ndjson';
   if (lowerType.includes('jsonl')) return '.jsonl';
@@ -294,36 +300,56 @@ function decodeInventoryBuffer(buffer) {
 }
 
 function decodeInventoryInputs(buffer, format, inputName) {
-  if (normalizeArchiveFormat(format) === '.zip' || isZipBuffer(buffer)) {
-    const inputs = extractZipEntries(buffer)
+  const extension = normalizeInventoryFormat(format);
+  const decodedBuffer = decodeInventoryBuffer(buffer);
+  if (extension === '.xlsx') return [decodeXlsxInventoryInput(decodedBuffer, inputName)];
+
+  if (normalizeArchiveFormat(format) === '.zip' || isZipBuffer(decodedBuffer)) {
+    const entries = extractZipEntries(decodedBuffer);
+    if (isXlsxEntrySet(entries)) return [decodeXlsxInventoryInput(decodedBuffer, inputName)];
+    const inputs = entries
       .map((entry) => decodeZipInventoryEntry(entry, inputName))
       .filter(Boolean);
     if (!inputs.length) {
-      throw new Error(`ZIP supplier inventory ${inputName} does not contain CSV, JSON, JSONL, or NDJSON files.`);
+      throw new Error(`ZIP supplier inventory ${inputName} does not contain CSV, JSON, JSONL, NDJSON, or XLSX files.`);
     }
     return inputs;
   }
 
   return [{
     name: inputName,
-    content: decodeInventoryBuffer(buffer).toString('utf8'),
-    extension: normalizeInventoryFormat(format)
+    content: decodedBuffer.toString('utf8'),
+    extension
   }];
+}
+
+function decodeXlsxInventoryInput(buffer, inputName) {
+  return {
+    name: inputName,
+    rows: parseXlsxInventory(buffer),
+    extension: '.xlsx'
+  };
 }
 
 function decodeZipInventoryEntry(entry, inputName) {
   const format = getInputFormat(entry.name, '');
   const extension = normalizeInventoryFormat(format);
   if (!supportedInventoryExtensions.has(extension)) return null;
+  const content = decodeInventoryBuffer(entry.content);
+  if (extension === '.xlsx') return decodeXlsxInventoryInput(content, `${inputName}#${entry.name}`);
   return {
     name: `${inputName}#${entry.name}`,
-    content: decodeInventoryBuffer(entry.content).toString('utf8'),
+    content: content.toString('utf8'),
     extension
   };
 }
 
 function normalizeArchiveFormat(format) {
-  return String(format || '').toLowerCase();
+  return String(format || '').toLowerCase().replace(/\.gz$/, '');
+}
+
+function isXlsxEntrySet(entries) {
+  return entries.some((entry) => entry.name.replace(/\\/g, '/').toLowerCase() === 'xl/workbook.xml');
 }
 
 function isGzipBuffer(buffer) {
@@ -388,7 +414,7 @@ function printHelp() {
   console.log(`Usage: node scripts/split-inventory-shards.js --input <file-or-url> [options]
 
 Options:
-  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz or a .zip archive. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON/XLSX, optionally .gz or a .zip archive. Can be repeated or comma-separated
   --output <dir>      Output shard directory. Default: public/inventory
   --manifest <file>   Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>    Optional absolute URL prefix for generated manifest source URLs
