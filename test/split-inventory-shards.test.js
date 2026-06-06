@@ -108,6 +108,48 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('maps non-standard supplier fields before writing city shards', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-field-map-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'custom.json');
+    await writeFile(inputFile, JSON.stringify([
+      {
+        offer: { channelId: 'custom-bj-1', price: 588 },
+        hotel: { title: '北京映射拆分酒店', provinceName: '北京', cityName: '北京' },
+        supplier: { name: '映射供应商' }
+      },
+      {
+        offer: { channelId: 'custom-sh-1', price: 688 },
+        hotel: { title: '上海映射拆分酒店', provinceName: '上海', cityName: '上海' },
+        supplier: { name: '映射供应商' }
+      }
+    ]));
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        fieldMap: {
+          id: 'offer.channelId',
+          name: 'hotel.title',
+          province: 'hotel.provinceName',
+          city: 'hotel.cityName',
+          price: 'offer.price',
+          providerName: 'supplier.name'
+        },
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('北京')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('上海')));
+      assert.ok(result.manifest.sources.every((source) => source.pricedHotelCount === 1));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads gzip-compressed remote JSON Lines supplier URLs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-remote-gzip-shards-'));
     const jsonl = [

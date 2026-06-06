@@ -16,13 +16,14 @@ export async function splitInventoryShards(options = {}) {
   if (options.clean) await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
 
+  const fieldMap = await loadFieldMap(options.fieldMap || options.fields || {}, rootDir);
   const shards = new Map();
   const skippedRows = [];
   let rowCount = 0;
 
   for (const inputFile of inputFiles) {
     const input = await loadInventoryInput(inputFile, rootDir);
-    const rows = parseInventory(input.content, input.extension);
+    const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, fieldMap));
     rows.forEach((row, index) => {
       rowCount += 1;
       const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
@@ -66,6 +67,7 @@ export async function splitInventoryShards(options = {}) {
 
   return {
     inputFiles,
+    fieldMap,
     rowCount,
     shardCount: writtenShards.length,
     skippedRowCount: skippedRows.length,
@@ -73,6 +75,52 @@ export async function splitInventoryShards(options = {}) {
     shards: writtenShards,
     manifest
   };
+}
+
+async function loadFieldMap(value, rootDir) {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return {};
+    const content = text.startsWith('{')
+      ? text
+      : await readFile(resolve(rootDir, text), 'utf8');
+    return loadFieldMap(JSON.parse(content), rootDir);
+  }
+  if (Array.isArray(value) || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([, sourcePath]) =>
+    typeof sourcePath === 'string' ||
+    (Array.isArray(sourcePath) && sourcePath.every((item) => typeof item === 'string'))
+  ));
+}
+
+function mapInventoryRow(row, fieldMap = {}) {
+  if (!fieldMap || !Object.keys(fieldMap).length) return row;
+  const mapped = { ...row };
+  Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
+    const value = getMappedValue(row, sourcePath);
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      mapped[targetField] = value;
+    }
+  });
+  return mapped;
+}
+
+function getMappedValue(row, sourcePath) {
+  const paths = Array.isArray(sourcePath) ? sourcePath : [sourcePath];
+  for (const path of paths) {
+    const value = getPathValue(row, path);
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function getPathValue(value, path) {
+  if (!path) return undefined;
+  return String(path).split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    return current[key];
+  }, value);
 }
 
 async function loadInventoryInput(inputFile, rootDir) {
@@ -167,6 +215,7 @@ function parseArgs(argv) {
     else if (arg === '--output') options.outputDir = argv[++index];
     else if (arg === '--manifest') options.manifestPath = argv[++index];
     else if (arg === '--base-url') options.baseUrl = argv[++index];
+    else if (arg === '--field-map') options.fieldMap = argv[++index];
     else if (arg === '--clean') options.clean = true;
     else if (arg === '--no-manifest') options.buildManifest = false;
     else if (arg === '--help') options.help = true;
@@ -183,6 +232,7 @@ Options:
   --output <dir>      Output shard directory. Default: public/inventory
   --manifest <file>   Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>    Optional absolute URL prefix for generated manifest source URLs
+  --field-map <json-or-file> Map non-standard supplier fields to internal fields
   --clean             Remove the output directory before writing shards
   --no-manifest       Only write shards, do not rebuild the manifest
 `);

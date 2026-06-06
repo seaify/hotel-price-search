@@ -48,6 +48,61 @@ describe('supplier inventory verifier', () => {
     }
   });
 
+  it('uses field map files while verifying non-standard supplier exports', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-field-map-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide.json');
+    const fieldMapFile = join(root, 'supplier', 'field-map.json');
+    await writeFile(inputFile, JSON.stringify(cityCatalog.map(({ province, city }, index) => ({
+      offer: {
+        id: `mapped-${index + 1}`,
+        amount: 500 + index,
+        updatedAt: '2026-06-06T12:00:00Z'
+      },
+      hotel: {
+        title: `${city}映射验收酒店`,
+        provinceName: province,
+        cityName: city
+      },
+      stay: {
+        from: '2026-06-01',
+        to: '2026-12-31'
+      },
+      supplier: {
+        name: '映射验收供应商'
+      }
+    }))));
+    await writeFile(fieldMapFile, JSON.stringify({
+      id: 'offer.id',
+      name: 'hotel.title',
+      province: 'hotel.provinceName',
+      city: 'hotel.cityName',
+      price: 'offer.amount',
+      providerName: 'supplier.name',
+      checkIn: 'stay.from',
+      checkOut: 'stay.to',
+      updatedAt: 'offer.updatedAt'
+    }));
+
+    try {
+      const result = await verifySupplierInventory({
+        cwd: root,
+        inputFiles: [inputFile],
+        fieldMap: fieldMapFile,
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        maxPriceAgeHours: 24,
+        referenceTime: '2026-06-06T18:00:00Z'
+      });
+      assert.equal(result.passed, true);
+      assert.equal(result.coverage.coveredCities, cityCatalog.length);
+      assert.equal(result.coverage.pricedHotelCount, cityCatalog.length);
+      assert.match(result.nextCommands[0], /--field-map/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails when city coverage and priced evidence are incomplete', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-fail-'));
     await mkdir(join(root, 'supplier'), { recursive: true });

@@ -12,6 +12,7 @@ export async function verifySupplierInventory(options = {}) {
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || [])
     .map((inputFile) => normalizeInventoryInputReference(inputFile, cwd));
   if (!inputFiles.length) throw new Error('At least one supplier inventory input file is required.');
+  const fieldMap = normalizeFieldMapReference(options.fieldMap || options.fields || {}, cwd);
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-'));
   const keepTemp = Boolean(options.keepTemp);
@@ -19,6 +20,7 @@ export async function verifySupplierInventory(options = {}) {
     const split = await splitInventoryShards({
       rootDir: tempRoot,
       inputFiles,
+      fieldMap,
       clean: true,
       manifestPath: defaultManifestPath
     });
@@ -56,7 +58,9 @@ export async function verifySupplierInventory(options = {}) {
 
 function buildNextCommands(inputFiles, options) {
   const inputs = inputFiles.map((inputFile) => `--input ${quoteShell(inputFile)}`).join(' ');
-  const splitCommand = `npm run split:inventory-shards -- ${inputs} --clean`;
+  const fieldMap = options.fieldMap || options.fields;
+  const fieldMapOption = fieldMap ? ` --field-map ${quoteShell(formatFieldMapOption(fieldMap))}` : '';
+  const splitCommand = `npm run split:inventory-shards -- ${inputs}${fieldMapOption} --clean`;
   const envParts = ['HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true'];
   const minHotelsPerCity = getNonNegativeInteger(options.minHotelsPerCity, 1);
   const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 1);
@@ -88,6 +92,13 @@ function normalizeInputFiles(value) {
     .filter(Boolean);
 }
 
+function normalizeFieldMapReference(value, cwd) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text || text.startsWith('{')) return text;
+  return resolve(cwd, text);
+}
+
 function getNonNegativeInteger(value, fallback = 0) {
   if (value === undefined || value === null || value === '') return fallback;
   const number = Number(value);
@@ -114,6 +125,7 @@ function parseArgs(argv) {
     if (arg === '--input') options.inputFiles.push(argv[++index]);
     else if (arg === '--check-in') options.checkIn = argv[++index];
     else if (arg === '--check-out') options.checkOut = argv[++index];
+    else if (arg === '--field-map') options.fieldMap = argv[++index];
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
     else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
     else if (arg === '--min-priced-hotels-per-city') options.minPricedHotelsPerCity = argv[++index];
@@ -163,6 +175,10 @@ function formatText(result) {
   return lines.join('\n');
 }
 
+function formatFieldMapOption(value) {
+  return typeof value === 'string' ? value : JSON.stringify(value || {});
+}
+
 function formatCityList(cities) {
   return cities.slice(0, 12)
     .map((item) => `${item.province}/${item.city}`)
@@ -176,6 +192,7 @@ Options:
   --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz. Can be repeated or comma-separated
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
+  --field-map <json-or-file> Map non-standard supplier fields to internal fields
   --min-hotels-per-city N         Default: 1
   --min-rows-per-city N           Default: 1
   --min-priced-hotels-per-city N  Default: 1

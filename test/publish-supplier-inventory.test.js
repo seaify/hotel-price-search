@@ -15,26 +15,46 @@ describe('supplier inventory publisher', () => {
       await mkdir(join(root, 'public'), { recursive: true });
       await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
     });
-    const inventoryCsv = [
-      'id,name,province,city,source,price,checkIn,checkOut,updatedAt',
-      ...cityCatalog.map(({ province, city }, index) => [
-        `hotel-${index + 1}`,
-        `${city}发布酒店`,
-        province,
-        city,
-        '全国发布供应商',
-        400 + index,
-        '2026-06-01',
-        '2026-12-31',
-        '2026-06-06T12:00:00Z'
-      ].join(','))
-    ].join('\n');
-    const inventoryServer = await startInventoryServer(inventoryCsv);
+    const inventoryJson = JSON.stringify(cityCatalog.map(({ province, city }, index) => ({
+      offer: {
+        channelId: `hotel-${index + 1}`,
+        sale: 400 + index,
+        updatedAt: '2026-06-06T12:00:00Z'
+      },
+      hotel: {
+        title: `${city}发布酒店`,
+        provinceName: province,
+        cityName: city
+      },
+      stay: {
+        from: '2026-06-01',
+        to: '2026-12-31'
+      },
+      supplier: {
+        name: '全国发布供应商'
+      }
+    })));
+    const fieldMap = {
+      id: 'offer.channelId',
+      name: 'hotel.title',
+      province: 'hotel.provinceName',
+      city: 'hotel.cityName',
+      price: 'offer.sale',
+      providerName: 'supplier.name',
+      checkIn: 'stay.from',
+      checkOut: 'stay.to',
+      updatedAt: 'offer.updatedAt'
+    };
+    const inventoryServer = await startInventoryServer(inventoryJson, {
+      path: '/supplier.json',
+      contentType: 'application/json'
+    });
 
     try {
       const result = await publishSupplierInventory({
         rootDir: root,
         inputFiles: [inventoryServer.url],
+        fieldMap,
         checkIn: '2026-06-06',
         checkOut: '2026-06-07',
         maxPriceAgeHours: 24,
@@ -79,20 +99,22 @@ describe('supplier inventory publisher', () => {
   });
 });
 
-async function startInventoryServer(content) {
+async function startInventoryServer(content, options = {}) {
+  const routePath = options.path || '/supplier.csv';
+  const contentType = options.contentType || 'text/csv; charset=utf-8';
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url, 'http://127.0.0.1');
-    if (requestUrl.pathname !== '/supplier.csv') {
+    if (requestUrl.pathname !== routePath) {
       response.writeHead(404).end();
       return;
     }
-    response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8' });
+    response.writeHead(200, { 'content-type': contentType });
     response.end(content);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return {
-    url: `http://127.0.0.1:${port}/supplier.csv?signature=a,b;c`,
+    url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }

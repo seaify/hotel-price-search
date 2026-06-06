@@ -17,6 +17,7 @@ export async function publishSupplierInventory(options = {}) {
   const verification = await verifySupplierInventory({
     cwd: rootDir,
     inputFiles,
+    fieldMap: options.fieldMap || options.fields || {},
     ...gateOptions
   });
 
@@ -37,6 +38,7 @@ export async function publishSupplierInventory(options = {}) {
     inputFiles,
     outputDir,
     manifestPath,
+    fieldMap: options.fieldMap || options.fields || {},
     baseUrl: options.baseUrl || '',
     clean: options.clean !== false
   });
@@ -114,6 +116,7 @@ function parseArgs(argv) {
     else if (arg === '--output') options.outputDir = argv[++index];
     else if (arg === '--manifest') options.manifestPath = argv[++index];
     else if (arg === '--base-url') options.baseUrl = argv[++index];
+    else if (arg === '--field-map') options.fieldMap = argv[++index];
     else if (arg === '--check-in') options.checkIn = argv[++index];
     else if (arg === '--check-out') options.checkOut = argv[++index];
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
@@ -172,6 +175,7 @@ Options:
   --output <dir>       Output shard directory. Default: public/inventory
   --manifest <file>    Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>     Optional absolute URL prefix for generated manifest source URLs
+  --field-map <json-or-file> Map non-standard supplier fields to internal fields
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
   --min-hotels-per-city N         Default: 1
