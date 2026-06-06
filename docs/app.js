@@ -983,7 +983,8 @@ function renderProviderStatus(providers) {
   const manifestCoverage = remoteHealth.manifestCoverage;
   const coverage = providers?.localInventory?.coverage || manifestCoverage;
   const coverageLabel = providers?.localInventory?.coverage ? '真实覆盖城市' : manifestCoverage ? '清单覆盖城市' : '真实覆盖城市';
-  const readiness = state.inventoryReadiness;
+  const readiness = getEffectiveInventoryReadiness(localReady ? summarizeStaticInventoryCoverage(getCoverageQuery()) : coverage);
+  const readinessLabel = readiness?.mode === 'runtime-import' ? '导入验收' : '发布验收';
   const readinessStatus = formatInventoryReadinessStatus(readiness);
   const readinessState = getInventoryReadinessState(readiness);
   const sourceErrors = [
@@ -998,7 +999,7 @@ function renderProviderStatus(providers) {
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
     [coverageLabel, coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
-    ['发布验收', readinessStatus, readinessState],
+    [readinessLabel, readinessStatus, readinessState],
     ['远程供应商文件', remoteHealthLabel, remoteHealthState],
     ['实时供应商 API', supplierApiReady ? `${supplierApiCount || 1} 源` : '未配置', supplierApiReady ? 'on' : ''],
     ['Amadeus API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
@@ -1017,7 +1018,9 @@ function renderProviderStatus(providers) {
     ${renderProviderErrorSummary(sourceErrors)}
   `;
   elements.coverageDownloadButton.disabled = !hasCoverageSource();
-  elements.sourcePill.textContent = readiness?.passed ? '供应商库存验收通过'
+  elements.sourcePill.textContent = readiness?.passed
+    ? readiness.mode === 'runtime-import' ? '本次导入库存验收通过' : '供应商库存验收通过'
+    : readiness?.mode === 'runtime-import' ? '导入库存未通过全国验收'
     : localReady ? '供应商真实库存已接入'
     : supplierApiReady ? '实时供应商 API 已配置'
     : apiReady ? 'Amadeus API 已配置'
@@ -1112,7 +1115,7 @@ async function refreshCoverageDashboard(providers) {
 }
 
 function getInventoryReadinessCoverageForDashboard() {
-  const coverage = state.inventoryReadiness?.coverage;
+  const coverage = getEffectiveInventoryReadiness()?.coverage;
   if (!coverage || !Number(coverage.totalCities || 0)) return null;
   return {
     ...coverage,
@@ -1131,10 +1134,11 @@ function getInventoryReadinessCoverageForDashboard() {
 
 function renderCoverageDashboard(coverage) {
   if (!elements.coverageDashboard) return;
+  const readiness = getEffectiveInventoryReadiness(coverage);
   if (!coverage || !Number(coverage.totalCities)) {
-    if (state.inventoryReadiness) {
+    if (readiness) {
       elements.coverageDashboard.hidden = false;
-      elements.coverageDashboard.innerHTML = renderInventoryReadinessSummary();
+      elements.coverageDashboard.innerHTML = renderInventoryReadinessSummary(readiness);
     } else {
       elements.coverageDashboard.hidden = true;
       elements.coverageDashboard.innerHTML = '';
@@ -1189,7 +1193,7 @@ function renderCoverageDashboard(coverage) {
         </div>
       ` : ''}
     </div>
-    ${renderInventoryReadinessSummary()}
+    ${renderInventoryReadinessSummary(readiness)}
     ${sourceCoverage.length ? `
       <div class="coverage-source-list">
         ${sourceCoverage.map((source) => `
@@ -1211,14 +1215,101 @@ function renderCoverageDashboard(coverage) {
   `;
 }
 
-function renderInventoryReadinessSummary() {
-  const readiness = state.inventoryReadiness;
+function getEffectiveInventoryReadiness(coverage = null) {
+  if (isStaticMode() && state.staticInventoryRows.length > 0) {
+    const runtimeCoverage = coverage && !['manifest', 'audit'].includes(coverage.mode)
+      ? coverage
+      : summarizeStaticInventoryCoverage(getCoverageQuery());
+    return buildRuntimeInventoryReadiness(runtimeCoverage);
+  }
+  return state.inventoryReadiness;
+}
+
+function buildRuntimeInventoryReadiness(coverage = {}) {
+  const cityCoverage = coverage.cityCoverage || [];
+  const citiesBelowMinimums = cityCoverage
+    .filter((item) => Number(item.hotelCount || 0) < 1 || Number(item.rowCount || 0) < 1)
+    .map((item) => ({
+      province: item.province,
+      city: item.city,
+      rowCount: Number(item.rowCount || 0),
+      hotelCount: Number(item.hotelCount || 0),
+      minRowCount: 1,
+      minHotelCount: 1
+    }));
+  const citiesBelowPriceMinimums = cityCoverage
+    .filter((item) => Number(item.pricedHotelCount || 0) < 1 || Number(item.pricedRowCount || 0) < 1)
+    .map((item) => ({
+      province: item.province,
+      city: item.city,
+      pricedRowCount: Number(item.pricedRowCount || 0),
+      pricedHotelCount: Number(item.pricedHotelCount || 0),
+      minPricedRowCount: 1,
+      minPricedHotelCount: 1
+    }));
+  const missingCityCount = (coverage.missingCities || []).length;
+  const passed = Number(coverage.totalCities || 0) > 0
+    && missingCityCount === 0
+    && citiesBelowMinimums.length === 0
+    && citiesBelowPriceMinimums.length === 0;
+  const readinessCoverage = {
+    ...coverage,
+    mode: 'runtime-import',
+    passed,
+    minHotelsPerCity: 1,
+    minRowsPerCity: 1,
+    minPricedHotelsPerCity: 1,
+    minPricedRowsPerCity: 1,
+    missingCityCount,
+    citiesBelowMinimumCount: citiesBelowMinimums.length,
+    citiesBelowPriceMinimumCount: citiesBelowPriceMinimums.length,
+    citiesWithoutHotelStatsCount: 0,
+    citiesWithStalePricesCount: 0,
+    unknownDestinationCount: 0,
+    unscopedSourceCount: 0,
+    totalMinimumFailures: [],
+    citiesBelowMinimums,
+    citiesBelowPriceMinimums,
+    citiesWithStalePrices: [],
+    unscopedSources: [],
+    unknownDestinations: []
+  };
+
+  return {
+    schemaVersion: 1,
+    mode: 'runtime-import',
+    passed,
+    sourceCount: (coverage.sourceCoverage || []).length || state.staticImportNames.length,
+    message: passed
+      ? 'Imported supplier inventory covers every catalog city with priced hotel evidence.'
+      : 'Imported supplier inventory does not yet cover every catalog city with priced hotel evidence.',
+    coverage: readinessCoverage,
+    failures: buildRuntimeReadinessFailures(readinessCoverage)
+  };
+}
+
+function buildRuntimeReadinessFailures(coverage) {
+  const failures = [];
+  if (Number(coverage.missingCityCount || 0)) {
+    failures.push({ type: 'missing-cities', count: coverage.missingCityCount });
+  }
+  if (Number(coverage.citiesBelowMinimumCount || 0)) {
+    failures.push({ type: 'city-depth-below-minimum', count: coverage.citiesBelowMinimumCount });
+  }
+  if (Number(coverage.citiesBelowPriceMinimumCount || 0)) {
+    failures.push({ type: 'city-priced-depth-below-minimum', count: coverage.citiesBelowPriceMinimumCount });
+  }
+  return failures;
+}
+
+function renderInventoryReadinessSummary(readiness = getEffectiveInventoryReadiness()) {
   if (!readiness) return '';
 
   const statusClass = readiness.passed ? 'passed' : 'failed';
   const statusText = readiness.passed
-    ? '发布验收已通过'
-    : readiness.mode === 'demo' ? '未接入真实库存验收' : '发布验收未通过';
+    ? readiness.mode === 'runtime-import' ? '本次导入验收已通过' : '发布验收已通过'
+    : readiness.mode === 'runtime-import' ? '本次导入验收未通过'
+      : readiness.mode === 'demo' ? '未接入真实库存验收' : '发布验收未通过';
   const generatedAt = readiness.generatedAt ? `生成于 ${formatReadinessTime(readiness.generatedAt)}` : '';
   const details = readiness.passed
     ? formatInventoryReadinessPassText(readiness)
@@ -1243,6 +1334,9 @@ function renderInventoryReadinessSummary() {
 
 function formatInventoryReadinessPassText(readiness) {
   const coverage = readiness.coverage || {};
+  if (readiness.mode === 'runtime-import') {
+    return `本次导入已覆盖 ${coverage.coveredCities || 0}/${coverage.totalCities || 0} 城，每个城市都有可解析的正价酒店。`;
+  }
   if (!Number(coverage.totalCities || 0)) return '当前构建已通过配置的供应商库存发布门槛。';
   return `已覆盖 ${coverage.coveredCities || 0}/${coverage.totalCities || 0} 城，发布门槛和价格证据均通过。`;
 }
@@ -1264,6 +1358,7 @@ function formatInventoryReadinessFailureText(readiness) {
   if (Number(coverage.unscopedSourceCount || 0)) failures.push(`${coverage.unscopedSourceCount} 个源缺少城市/省份范围`);
   if (Number(coverage.unknownDestinationCount || 0)) failures.push(`${coverage.unknownDestinationCount} 个目的地无法识别`);
   if (failures.length) return failures.slice(0, 4).join('；');
+  if (readiness.mode === 'runtime-import') return '本次导入还没有达到全国每城都有可查价格的验收门槛。';
   return '当前供应商库存没有通过配置的发布验收门槛。';
 }
 
@@ -1351,12 +1446,16 @@ function summarizeStaticInventoryCoverage(params = {}) {
     .filter((hotel) => hotel.available && hotel.city)
     .filter((hotel) => !dateFiltered || isStaticAvailableForDates(hotel, params));
   const mergedHotels = mergeStaticRates(normalized);
+  const pricedRows = normalized.filter((hotel) => Number(hotel.price || 0) > 0);
+  const pricedHotels = mergeStaticRates(pricedRows);
   const coveredCitySet = new Set(normalized.map((hotel) => hotel.city));
   const cities = getStaticCities();
   const coveredCities = cities.filter((city) => coveredCitySet.has(city.city));
   const provinceSet = new Set(cities.map((city) => city.province));
   const rowCountByCity = countStaticBy(normalized.map((hotel) => hotel.city));
   const hotelCountByCity = countStaticBy(mergedHotels.map((hotel) => hotel.city));
+  const pricedRowCountByCity = countStaticBy(pricedRows.map((hotel) => hotel.city));
+  const pricedHotelCountByCity = countStaticBy(pricedHotels.map((hotel) => hotel.city));
   const sourcesByCity = groupStaticSourcesByCity(normalized);
   const cityCoverage = cities.map(({ province, city }) => ({
     province,
@@ -1364,6 +1463,8 @@ function summarizeStaticInventoryCoverage(params = {}) {
     covered: coveredCitySet.has(city),
     rowCount: rowCountByCity.get(city) || 0,
     hotelCount: hotelCountByCity.get(city) || 0,
+    pricedRowCount: pricedRowCountByCity.get(city) || 0,
+    pricedHotelCount: pricedHotelCountByCity.get(city) || 0,
     sourceCount: sourcesByCity.get(city)?.length || 0,
     sources: sourcesByCity.get(city) || []
   }));
@@ -1371,6 +1472,8 @@ function summarizeStaticInventoryCoverage(params = {}) {
   return {
     rowCount: state.staticInventoryRows.length,
     hotelCount: mergedHotels.length,
+    pricedRowCount: pricedRows.length,
+    pricedHotelCount: pricedHotels.length,
     coveredCities: coveredCities.length,
     totalCities: cities.length,
     coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
@@ -1510,10 +1613,13 @@ function buildStaticSourceCoverage(hotels) {
   return [...bySource.entries()].map(([sourceName, sourceHotels]) => {
     const citySet = new Set(sourceHotels.map((hotel) => hotel.city).filter(Boolean));
     const coveredCities = cities.filter((city) => citySet.has(city.city));
+    const pricedRows = sourceHotels.filter((hotel) => Number(hotel.price || 0) > 0);
     return {
       sourceName,
       rowCount: sourceHotels.length,
       hotelCount: mergeStaticRates(sourceHotels).length,
+      pricedRowCount: pricedRows.length,
+      pricedHotelCount: mergeStaticRates(pricedRows).length,
       coveredCities: coveredCities.length,
       totalCities: cities.length,
       coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
