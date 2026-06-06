@@ -3,9 +3,11 @@ import { dirname, extname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { buildInventoryManifest, normalizeInventoryLocation, parseInventory, pick, sortChinese } from './build-inventory-manifest.js';
+import { extractZipEntries, isZipBuffer } from './zip-archive.js';
 
 const defaultOutputDir = 'public/inventory';
 const defaultManifestPath = 'public/hotel-inventory.manifest.json';
+const supportedInventoryExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
 
 export async function splitInventoryShards(options = {}) {
   const rootDir = resolve(options.rootDir || process.cwd());
@@ -27,24 +29,26 @@ export async function splitInventoryShards(options = {}) {
   let rowCount = 0;
 
   for (const source of inventorySources) {
-    const input = await loadInventoryInput(source.inputFile, rootDir, source.requestHeaders);
-    const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, source.fieldMap));
-    rows.forEach((row, index) => {
-      rowCount += 1;
-      const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
-      if (!location.city || !location.province) {
-        skippedRows.push({ inputFile: source.inputFile, sourceName: source.name, rowNumber: index + 1, reason: 'missing city or province' });
-        return;
-      }
-      const key = `${location.province}|${location.city}`;
-      const shard = shards.get(key) || {
-        province: location.province,
-        city: location.city,
-        rows: []
-      };
-      shard.rows.push(row);
-      shards.set(key, shard);
-    });
+    const inputs = await loadInventoryInputs(source.inputFile, rootDir, source.requestHeaders);
+    for (const input of inputs) {
+      const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, source.fieldMap));
+      rows.forEach((row, index) => {
+        rowCount += 1;
+        const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
+        if (!location.city || !location.province) {
+          skippedRows.push({ inputFile: input.name || source.inputFile, sourceName: source.name, rowNumber: index + 1, reason: 'missing city or province' });
+          return;
+        }
+        const key = `${location.province}|${location.city}`;
+        const shard = shards.get(key) || {
+          province: location.province,
+          city: location.city,
+          rows: []
+        };
+        shard.rows.push(row);
+        shards.set(key, shard);
+      });
+    }
   }
 
   const writtenShards = [];
@@ -249,25 +253,18 @@ function getPathValue(value, path) {
   }, value);
 }
 
-async function loadInventoryInput(inputFile, rootDir, requestHeaders = {}) {
+async function loadInventoryInputs(inputFile, rootDir, requestHeaders = {}) {
   if (isRemoteInventoryInput(inputFile)) {
     const response = await fetch(inputFile, { headers: requestHeaders });
     if (!response.ok) throw new Error(`Failed to fetch supplier inventory URL ${inputFile}: HTTP ${response.status}`);
     const format = getInputFormat(inputFile, response.headers.get('content-type') || '');
     const buffer = Buffer.from(await response.arrayBuffer());
-    const content = decodeInventoryBuffer(buffer).toString('utf8');
-    return {
-      content,
-      extension: normalizeInventoryFormat(format)
-    };
+    return decodeInventoryInputs(buffer, format, inputFile);
   }
   const inputPath = resolve(rootDir, inputFile);
   const format = getInputFormat(inputPath, '');
   const buffer = await readFile(inputPath);
-  return {
-    content: decodeInventoryBuffer(buffer).toString('utf8'),
-    extension: normalizeInventoryFormat(format)
-  };
+  return decodeInventoryInputs(buffer, format, inputPath);
 }
 
 function getInputFormat(inputFile, contentType = '') {
@@ -280,9 +277,11 @@ function getInputFormat(inputFile, contentType = '') {
   }
   const extension = extname(lowerPath).toLowerCase();
   if (extension) return extension;
-  if (contentType.includes('ndjson')) return '.ndjson';
-  if (contentType.includes('jsonl')) return '.jsonl';
-  if (contentType.includes('json')) return '.json';
+  const lowerType = contentType.toLowerCase();
+  if (lowerType.includes('zip')) return '.zip';
+  if (lowerType.includes('ndjson')) return '.ndjson';
+  if (lowerType.includes('jsonl')) return '.jsonl';
+  if (lowerType.includes('json')) return '.json';
   return '.csv';
 }
 
@@ -292,6 +291,39 @@ function normalizeInventoryFormat(format) {
 
 function decodeInventoryBuffer(buffer) {
   return isGzipBuffer(buffer) ? gunzipSync(buffer) : buffer;
+}
+
+function decodeInventoryInputs(buffer, format, inputName) {
+  if (normalizeArchiveFormat(format) === '.zip' || isZipBuffer(buffer)) {
+    const inputs = extractZipEntries(buffer)
+      .map((entry) => decodeZipInventoryEntry(entry, inputName))
+      .filter(Boolean);
+    if (!inputs.length) {
+      throw new Error(`ZIP supplier inventory ${inputName} does not contain CSV, JSON, JSONL, or NDJSON files.`);
+    }
+    return inputs;
+  }
+
+  return [{
+    name: inputName,
+    content: decodeInventoryBuffer(buffer).toString('utf8'),
+    extension: normalizeInventoryFormat(format)
+  }];
+}
+
+function decodeZipInventoryEntry(entry, inputName) {
+  const format = getInputFormat(entry.name, '');
+  const extension = normalizeInventoryFormat(format);
+  if (!supportedInventoryExtensions.has(extension)) return null;
+  return {
+    name: `${inputName}#${entry.name}`,
+    content: decodeInventoryBuffer(entry.content).toString('utf8'),
+    extension
+  };
+}
+
+function normalizeArchiveFormat(format) {
+  return String(format || '').toLowerCase();
 }
 
 function isGzipBuffer(buffer) {
@@ -356,7 +388,7 @@ function printHelp() {
   console.log(`Usage: node scripts/split-inventory-shards.js --input <file-or-url> [options]
 
 Options:
-  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz or a .zip archive. Can be repeated or comma-separated
   --output <dir>      Output shard directory. Default: public/inventory
   --manifest <file>   Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>    Optional absolute URL prefix for generated manifest source URLs

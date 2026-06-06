@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { gzipSync } from 'node:zlib';
+import { deflateRawSync, gzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { auditInventoryCoverage } from '../scripts/audit-inventory-coverage.js';
@@ -157,6 +157,38 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('loads local ZIP supplier archives with multiple inventory files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-zip-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide.zip');
+    const archive = buildZipArchive({
+      'north/beijing.csv': [
+        'id,name,province,city,source,price',
+        'bj-zip-1,北京ZIP拆分酒店,北京,北京,ZIP供应商,588'
+      ].join('\n'),
+      'east/shanghai.jsonl': [
+        JSON.stringify({ id: 'sh-zip-1', name: '上海ZIP拆分酒店', province: '上海', city: '上海', source: 'ZIP供应商', price: 688 })
+      ].join('\n'),
+      'README.txt': 'not inventory'
+    });
+    await writeFile(inputFile, archive);
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('北京')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('上海')));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('maps non-standard supplier fields before writing city shards', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-field-map-shards-'));
     await mkdir(join(root, 'supplier'), { recursive: true });
@@ -262,6 +294,38 @@ describe('inventory shard splitter', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('loads remote ZIP supplier archives before writing city shards', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-remote-zip-shards-'));
+    const archive = buildZipArchive({
+      'guangdong/guangzhou.csv': [
+        'id,name,province,city,source,price',
+        'gz-zip-1,广州远程ZIP酒店,广东,广州,远程ZIP供应商,588'
+      ].join('\n'),
+      'zhejiang/hangzhou.json': JSON.stringify([
+        { id: 'hz-zip-1', name: '杭州远程ZIP酒店', province: '浙江', city: '杭州', source: '远程ZIP供应商', price: 688 }
+      ])
+    });
+    const inventoryServer = await startInventoryServer(archive, {
+      path: '/supplier.zip',
+      contentType: 'application/zip'
+    });
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inventoryServer.url],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('广州')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('杭州')));
+    } finally {
+      await inventoryServer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 async function startInventoryServer(content, options = {}) {
@@ -342,4 +406,61 @@ function hasRequiredHeaders(request, requiredHeaders) {
   return Object.entries(requiredHeaders).every(([name, value]) =>
     request.headers[String(name).toLowerCase()] === value
   );
+}
+
+function buildZipArchive(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  Object.entries(entries).forEach(([name, content]) => {
+    const nameBuffer = Buffer.from(name, 'utf8');
+    const dataBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+    const compressedBuffer = deflateRawSync(dataBuffer);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(compressedBuffer.length, 18);
+    localHeader.writeUInt32LE(dataBuffer.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, compressedBuffer);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(compressedBuffer.length, 20);
+    centralHeader.writeUInt32LE(dataBuffer.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt32LE(0, 34);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+
+    offset += localHeader.length + nameBuffer.length + compressedBuffer.length;
+  });
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(Object.keys(entries).length, 8);
+  end.writeUInt16LE(Object.keys(entries).length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralDirectory, end]);
 }

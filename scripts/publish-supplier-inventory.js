@@ -191,7 +191,7 @@ function printHelp() {
   console.log(`Usage: node scripts/publish-supplier-inventory.js --input <file-or-url> [options]
 
 Options:
-  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz. Can be repeated or comma-separated
+  --input <file-or-url> Supplier inventory CSV/JSON/JSONL/NDJSON, optionally .gz or a .zip archive. Can be repeated or comma-separated
   --output <dir>       Output shard directory. Default: public/inventory
   --manifest <file>    Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>     Optional absolute URL prefix for generated manifest source URLs

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       supplier_inventory_inputs:
-        description: Optional public or signed supplier export URL(s), one per line or JSON array
+        description: Optional public or signed supplier export URL(s), including .zip archives, one per line or JSON array
         required: false
         type: string
       supplier_source_manifest_url:
