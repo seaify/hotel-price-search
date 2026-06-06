@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { applyFilters, findCity, getNightCount } from '../hotel-data.js';
 
 const defaultImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80';
@@ -7,7 +8,9 @@ const maxImportBytes = 8 * 1024 * 1024;
 const defaultRemoteMaxBytes = 12 * 1024 * 1024;
 const defaultRemoteTimeoutMs = 8_000;
 const defaultInventoryCacheSeconds = 60;
-const allowedExtensions = new Set(['.csv', '.json']);
+const allowedImportExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
+const allowedInventoryFormats = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']);
+const gzipFormats = new Set(['.csv.gz', '.json.gz', '.jsonl.gz', '.ndjson.gz']);
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const inventoryCache = new Map();
 const inventoryCollectionKeys = ['hotels', 'items', 'data', 'results', 'records', 'list', '酒店列表', '酒店'];
@@ -121,7 +124,7 @@ export async function listImportedInventoryFiles() {
   try {
     const entries = await readdir(importDir, { withFileTypes: true });
     const files = entries
-      .filter((entry) => entry.isFile() && allowedExtensions.has(extname(entry.name).toLowerCase()))
+      .filter((entry) => entry.isFile() && allowedImportExtensions.has(extname(entry.name).toLowerCase()))
       .map((entry) => join(importDir, entry.name));
 
     return Promise.all(files.map(async (filePath) => {
@@ -142,8 +145,8 @@ export async function listImportedInventoryFiles() {
 export async function saveImportedInventoryFile({ filename, content }) {
   const safeName = sanitizeImportFilename(filename);
   const extension = extname(safeName).toLowerCase();
-  if (!allowedExtensions.has(extension)) {
-    throw new Error('仅支持 .csv 或 .json 酒店价格文件。');
+  if (!allowedImportExtensions.has(extension)) {
+    throw new Error('仅支持 .csv、.json、.jsonl 或 .ndjson 酒店价格文件。');
   }
   if (typeof content !== 'string' || content.trim().length === 0) {
     throw new Error('文件内容不能为空。');
@@ -211,6 +214,7 @@ export async function searchLocalInventory(params) {
 
 export function parseInventory(raw, extension = '.json') {
   if (extension === '.csv') return parseCsv(raw);
+  if (extension === '.jsonl' || extension === '.ndjson') return parseJsonLines(raw);
   const parsed = JSON.parse(raw);
   return flattenInventoryDocument(parsed);
 }
@@ -342,8 +346,9 @@ async function readInventoryFile(file) {
     return { ...file, sourceLabel: file.filePath, rows: cached.rows, cache: 'hit' };
   }
 
-  const raw = await readFile(file.filePath, 'utf8');
-  const rows = parseInventory(raw, extname(file.filePath).toLowerCase());
+  const raw = await readFile(file.filePath);
+  const { text, format } = decodeInventoryContent(raw, file.filePath);
+  const rows = parseInventory(text, format);
   inventoryCache.set(cacheKey, {
     type: 'file',
     size: file.size,
@@ -383,18 +388,22 @@ async function readRemoteInventoryUrl(url) {
     throw new Error(`${redactRemoteUrl(url)} 文件超过 ${formatBytes(maxBytes)} 限制。`);
   }
 
-  const raw = await response.text();
-  if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
+  const raw = Buffer.from(await response.arrayBuffer());
+  if (raw.byteLength > maxBytes) {
     throw new Error(`${redactRemoteUrl(url)} 文件超过 ${formatBytes(maxBytes)} 限制。`);
   }
 
   const contentType = response.headers.get('content-type') || '';
-  const extension = getRemoteInventoryExtension(url, contentType);
+  const contentEncoding = response.headers.get('content-encoding') || '';
+  const { text, format } = decodeInventoryContent(raw, url, contentType, contentEncoding);
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+    throw new Error(`${redactRemoteUrl(url)} 解压后文件超过 ${formatBytes(maxBytes)} 限制。`);
+  }
   return {
     filePath: url,
     sourceLabel: redactRemoteUrl(url),
     readable: true,
-    rows: cacheRemoteRows(cacheKey, parseInventory(raw, extension)),
+    rows: cacheRemoteRows(cacheKey, parseInventory(text, format)),
     cache: 'miss'
   };
 }
@@ -417,14 +426,44 @@ function getRemoteInventoryHeaders() {
   return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
 }
 
-function getRemoteInventoryExtension(url, contentType) {
-  try {
-    const extension = extname(new URL(url).pathname).toLowerCase();
-    if (allowedExtensions.has(extension)) return extension;
-  } catch {
-    // Fall back to content type below.
+function decodeInventoryContent(buffer, source, contentType = '', contentEncoding = '') {
+  const format = getInventoryFormat(source, contentType);
+  const shouldGunzip = gzipFormats.has(format) || contentEncoding.toLowerCase().includes('gzip');
+  const decoded = shouldGunzip && isGzipBuffer(buffer) ? gunzipSync(buffer) : buffer;
+  return {
+    text: decoded.toString('utf8'),
+    format: normalizeInventoryFormat(format)
+  };
+}
+
+function getInventoryFormat(source, contentType = '') {
+  const path = getInventoryPathname(source);
+  const loweredPath = path.toLowerCase();
+  for (const format of allowedInventoryFormats) {
+    if (loweredPath.endsWith(format)) return format;
   }
-  return contentType.toLowerCase().includes('csv') ? '.csv' : '.json';
+
+  const loweredType = contentType.toLowerCase();
+  if (loweredType.includes('ndjson') || loweredType.includes('jsonl')) return '.jsonl';
+  if (loweredType.includes('csv')) return '.csv';
+  if (loweredType.includes('json')) return '.json';
+  return '.json';
+}
+
+function getInventoryPathname(source) {
+  try {
+    return new URL(source).pathname;
+  } catch {
+    return String(source || '');
+  }
+}
+
+function normalizeInventoryFormat(format) {
+  return gzipFormats.has(format) ? format.replace(/\.gz$/, '') : format;
+}
+
+function isGzipBuffer(buffer) {
+  return buffer?.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
 }
 
 function getRemoteTimeoutMs() {
@@ -650,6 +689,14 @@ function parseCsv(raw) {
     const values = splitCsvLine(line);
     return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? '']));
   });
+}
+
+function parseJsonLines(raw) {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => flattenInventoryDocument(JSON.parse(line)));
 }
 
 function splitCsvLine(line) {

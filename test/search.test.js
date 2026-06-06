@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { gzipSync } from 'node:zlib';
 import { buildDemoHotels, cityCatalog } from '../server/hotel-data.js';
 import { createHotelServer, searchHotels } from '../server/index.js';
 import { clearInventoryCache } from '../server/providers/local-inventory.js';
@@ -278,6 +279,131 @@ describe('hotel search data', () => {
       assert.deepEqual(result.hotels[0].providerNames.sort(), ['携程供应商', '美团供应商'].sort());
       assert.equal(result.providers.localInventory.readableCount, 2);
     } finally {
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads JSON Lines supplier exports from local files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-jsonl-'));
+    const filePath = join(dir, 'prices.ndjson');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    const lines = [
+      {
+        id: 'jsonl-001',
+        hotelName: '重庆JSONL供应商酒店',
+        province: '重庆',
+        city: '重庆',
+        district: '渝中',
+        price: 558,
+        source: 'JSONL供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'jsonl-002',
+        hotelName: '重庆JSONL备用酒店',
+        province: '重庆',
+        city: '重庆',
+        district: '江北',
+        price: 498,
+        source: 'JSONL供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      }
+    ].map((row) => JSON.stringify(row)).join('\n');
+    await writeFile(filePath, lines);
+
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    process.env.HOTEL_DATA_FILE = filePath;
+    clearInventoryCache();
+
+    try {
+      const result = await searchHotels({
+        city: '重庆',
+        keyword: 'JSONL',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 2);
+      assert.equal(result.hotels[0].providerName, 'JSONL供应商');
+      assert.ok(result.hotels.some((hotel) => hotel.name === '重庆JSONL供应商酒店'));
+    } finally {
+      clearInventoryCache();
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads gzip-compressed supplier CSV files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-gzip-'));
+    const filePath = join(dir, 'prices.csv.gz');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    const csv = [
+      'id,name,province,city,district,address,star,rating,price,currency,tags,source,checkIn,checkOut,available',
+      'gzip-001,厦门压缩供应商酒店,福建,厦门,思明,厦门市思明区环岛路 1 号,5,4.8,788,CNY,真实库存,压缩CSV供应商,2026-06-01,2026-12-31,true'
+    ].join('\n');
+    await writeFile(filePath, gzipSync(Buffer.from(csv, 'utf8')));
+
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    process.env.HOTEL_DATA_FILE = filePath;
+    clearInventoryCache();
+
+    try {
+      const result = await searchHotels({
+        city: '厦门',
+        keyword: '压缩供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '厦门压缩供应商酒店');
+      assert.equal(result.hotels[0].price, 788);
+      assert.equal(result.hotels[0].providerName, '压缩CSV供应商');
+    } finally {
+      clearInventoryCache();
       if (previousFile === undefined) {
         delete process.env.HOTEL_DATA_FILE;
       } else {

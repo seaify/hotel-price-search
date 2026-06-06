@@ -38,9 +38,14 @@ const staticImagePool = [
   'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=900&q=80'
 ];
 
+const staticInventoryCollectionKeys = ['hotels', 'items', 'data', 'results', 'records', 'list', '酒店列表', '酒店'];
+const staticNestedRoomKeys = ['rooms', 'roomTypes', 'roomList', '房型', '房型列表', '房间'];
+const staticNestedRateKeys = ['rates', 'offers', 'prices', 'roomRates', 'plans', 'products', '报价', '报价列表', '价格', '价格列表', '价格计划'];
+const staticNestedCollectionKeys = new Set([...staticInventoryCollectionKeys, ...staticNestedRoomKeys, ...staticNestedRateKeys]);
+
 const staticFieldAliases = {
   id: ['id', 'hotelId', 'hotel_id', '酒店ID', '酒店编号', '供应商酒店ID'],
-  name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '名称'],
+  name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '酒店', '名称'],
   province: ['province', '省份', '省'],
   city: ['city', 'destination', '目的地', '城市', '市'],
   district: ['district', 'businessDistrict', '行政区', '区县', '区域', '商圈'],
@@ -507,7 +512,7 @@ function getStaticProviderStatus() {
 }
 
 function importStaticInventoryFile(filename, content) {
-  const extension = filename.toLowerCase().endsWith('.json') ? '.json' : '.csv';
+  const extension = getStaticInventoryExtension(filename);
   const rows = parseStaticInventory(content, extension).map((row) => ({
     ...row,
     __inventoryFile: filename
@@ -541,7 +546,7 @@ function searchStaticHotels(query) {
     hotels: page.hotels,
     notice: hasInventory
       ? `价格来自 ${state.staticImportNames.length} 个浏览器导入文件，已按同酒店合并并优先显示最低价。`
-      : 'GitHub Pages 静态版当前展示全国示例价格；可在左侧导入供应商 CSV/JSON 后查询真实价格。',
+      : 'GitHub Pages 静态版当前展示全国示例价格；可在左侧导入供应商 CSV/JSON/JSONL 后查询真实价格。',
     providers: getStaticProviderStatus()
   };
 }
@@ -738,9 +743,125 @@ function normalizeStaticQuery(query) {
 function parseStaticInventory(content, extension) {
   if (extension === '.json') {
     const parsed = JSON.parse(content);
-    return Array.isArray(parsed) ? parsed : parsed.hotels || [];
+    return flattenStaticInventoryDocument(parsed);
+  }
+  if (extension === '.jsonl' || extension === '.ndjson') {
+    return content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .flatMap((line) => flattenStaticInventoryDocument(JSON.parse(line)));
   }
   return parseStaticCsv(content);
+}
+
+function getStaticInventoryExtension(filename) {
+  const lowered = filename.toLowerCase();
+  if (lowered.endsWith('.jsonl')) return '.jsonl';
+  if (lowered.endsWith('.ndjson')) return '.ndjson';
+  if (lowered.endsWith('.json')) return '.json';
+  return '.csv';
+}
+
+function flattenStaticInventoryDocument(parsed) {
+  const records = getStaticInventoryRecords(parsed);
+  return records.flatMap(flattenStaticInventoryRecord);
+}
+
+function getStaticInventoryRecords(value, inherited = {}) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({ ...inherited, ...item }));
+  }
+  if (!value || typeof value !== 'object') return [];
+  const rootFields = { ...inherited, ...stripStaticNestedCollections(value) };
+
+  for (const key of staticInventoryCollectionKeys) {
+    const nested = value[key];
+    if (Array.isArray(nested)) return getStaticInventoryRecords(nested, rootFields);
+    if (nested && typeof nested === 'object') {
+      const nestedRecords = getStaticInventoryRecords(nested, rootFields);
+      if (nestedRecords.length) return nestedRecords;
+    }
+  }
+
+  return [{ ...inherited, ...value }];
+}
+
+function flattenStaticInventoryRecord(record) {
+  if (!record || typeof record !== 'object') return [];
+  const rooms = getFirstStaticArray(record, staticNestedRoomKeys);
+  const directRates = getFirstStaticArray(record, staticNestedRateKeys);
+
+  if (rooms.length) {
+    const rows = rooms.flatMap((room) => {
+      if (!room || typeof room !== 'object') return [];
+      const rates = getFirstStaticArray(room, staticNestedRateKeys);
+      return rates.length
+        ? rates.map((rate) => mergeStaticInventoryParts(record, room, rate))
+        : [mergeStaticInventoryParts(record, room, null)];
+    });
+    if (rows.length) return rows;
+  }
+
+  if (directRates.length) return directRates.map((rate) => mergeStaticInventoryParts(record, null, rate));
+  return [stripStaticNestedCollections(record)];
+}
+
+function mergeStaticInventoryParts(hotel, room, rate) {
+  const hotelFields = stripStaticNestedCollections(hotel || {});
+  const roomFields = stripStaticNestedCollections(room || {});
+  const rateFields = stripStaticNestedCollections(rate || {});
+  const row = { ...hotelFields, ...roomFields, ...rateFields };
+  const roomName = pickStaticFromParts([roomFields], 'roomName') || pickStaticFromParts([roomFields], 'name');
+  const rateName = pickStaticFromParts([rateFields], 'roomName') || pickStaticFromParts([rateFields], 'name');
+
+  row.id = pickStaticFromParts([hotelFields, row], 'id') || row.id;
+  row.name = pickStaticFromParts([hotelFields, row], 'name') || row.name;
+  row.roomName = formatStaticRoomRateName(roomName, rateName) || row.roomName;
+  row.amenities = [
+    ...splitStaticList(pickStaticFromParts([hotelFields], 'amenities')),
+    ...splitStaticList(pickStaticFromParts([roomFields], 'amenities')),
+    ...splitStaticList(pickStaticFromParts([rateFields], 'amenities'))
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  row.tags = [
+    ...splitStaticList(pickStaticFromParts([hotelFields], 'tags')),
+    ...splitStaticList(pickStaticFromParts([roomFields], 'tags')),
+    ...splitStaticList(pickStaticFromParts([rateFields], 'tags'))
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+
+  return row;
+}
+
+function stripStaticNestedCollections(value) {
+  return Object.fromEntries(
+    Object.entries(value || {}).filter(([key, item]) => {
+      const nestedValue = item && typeof item === 'object';
+      return !staticNestedCollectionKeys.has(key) || !nestedValue;
+    })
+  );
+}
+
+function getFirstStaticArray(value, keys) {
+  for (const key of keys) {
+    if (Array.isArray(value?.[key])) return value[key];
+  }
+  return [];
+}
+
+function pickStaticFromParts(parts, field) {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const value = pickStatic(part, field);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function formatStaticRoomRateName(roomName, rateName) {
+  if (roomName && rateName && roomName !== rateName) return `${roomName} · ${rateName}`;
+  return rateName || roomName || '';
 }
 
 function parseStaticCsv(content) {
