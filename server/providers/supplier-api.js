@@ -1,3 +1,4 @@
+import { resolveDestination } from '../hotel-data.js';
 import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
 const defaultSupplierApiTimeoutMs = 10_000;
@@ -19,6 +20,7 @@ export function getSupplierApiStatus() {
     timeoutMs: firstSource?.timeoutMs || getSupplierApiTimeoutMs(),
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
     authConfigured: sources.some((source) => Boolean(source.auth)),
+    cityFanoutConfigured: sources.some((source) => source.cityFanout),
     requestMapConfigured: sources.some((source) =>
       Object.keys(source.requestMap || {}).length > 0 ||
       Object.keys(source.requestDefaults || {}).length > 0
@@ -37,13 +39,14 @@ export async function searchSupplierApiInventory(params) {
     return { hotels: [], status, rowCount: 0, sourceCount: 0 };
   }
 
-  const loads = await Promise.allSettled(sources.map((source) => readSupplierApiSource(source, params)));
+  const loads = await Promise.allSettled(sources.map((source) => readSupplierApiSourceLoads(source, params)));
   const loaded = loads
     .filter((result) => result.status === 'fulfilled')
     .map((result) => result.value);
   const sourceErrors = loads
     .filter((result) => result.status === 'rejected')
-    .map((result) => result.reason?.message || '实时供应商 API 读取失败。');
+    .map((result) => result.reason?.message || '实时供应商 API 读取失败。')
+    .concat(loaded.flatMap((source) => source.sourceErrors || []));
   if (!loaded.length && sourceErrors.length) {
     throw new Error(sourceErrors.join('；'));
   }
@@ -57,9 +60,10 @@ export async function searchSupplierApiInventory(params) {
   );
   const nextStatus = {
     ...status,
-    sourceCount: loaded.length,
+    sourceCount: loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0),
     sourceErrors,
-    rowCount: rows.length
+    rowCount: rows.length,
+    fanoutRequestCount: loaded.reduce((sum, source) => sum + Number(source.fanoutRequestCount || 0), 0)
   };
   const hotels = searchInventoryRows(rows, params, {
     source: 'supplier-api',
@@ -75,8 +79,40 @@ export async function searchSupplierApiInventory(params) {
     hotels,
     status: nextStatus,
     rowCount: rows.length,
-    sourceCount: loaded.length,
+    sourceCount: nextStatus.sourceCount,
     ...(upstreamPage ? upstreamPage : {})
+  };
+}
+
+async function readSupplierApiSourceLoads(source, params) {
+  const cities = getSupplierFanoutCities(source, params);
+  if (!cities.length) return readSupplierApiSource(source, params);
+
+  const loads = await settleLimited(
+    cities.map((city) => () => readSupplierApiSource(source, {
+      ...params,
+      city: city.city,
+      destinationType: 'city'
+    })),
+    source.cityFanoutConcurrency
+  );
+  const loaded = loads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = loads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '实时供应商城市请求失败。');
+  if (!loaded.length) {
+    throw new Error(`${source.name} 的城市扇出请求全部失败。`);
+  }
+
+  return {
+    ...source,
+    rows: loaded.flatMap((item) => item.rows),
+    pagination: null,
+    sourceErrors,
+    sourceCount: loaded.length,
+    fanoutRequestCount: cities.length
   };
 }
 
@@ -95,6 +131,40 @@ async function readSupplierApiSource(source, params) {
     rows: parsed.rows,
     pagination: parsed.pagination
   };
+}
+
+function getSupplierFanoutCities(source, params) {
+  if (!source.cityFanout || !['nationwide', 'province'].includes(params.destinationType)) return [];
+  const destination = resolveDestination(params.city);
+  const cities = destination.type === 'nationwide' || destination.type === 'province'
+    ? destination.cities
+    : [];
+  if (!cities.length) return [];
+  return source.cityFanoutLimit > 0 ? cities.slice(0, source.cityFanoutLimit) : cities;
+}
+
+async function settleLimited(tasks, concurrency) {
+  const results = new Array(tasks.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), tasks.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < tasks.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      try {
+        results[currentIndex] = {
+          status: 'fulfilled',
+          value: await tasks[currentIndex]()
+        };
+      } catch (error) {
+        results[currentIndex] = {
+          status: 'rejected',
+          reason: error
+        };
+      }
+    }
+  }));
+  return results;
 }
 
 function parseSupplierApiResponse(text, format, source = {}) {
@@ -448,6 +518,9 @@ function getSupplierApiConfigSources() {
       headers: normalizeHeaders(item.headers || {}),
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
       auth: normalizeSupplierAuth(item.auth),
+      cityFanout: parseBoolean(item.cityFanout ?? item.fanoutCities ?? item.destinationFanout, false),
+      cityFanoutLimit: getPositiveInteger(item.cityFanoutLimit ?? item.fanoutLimit, 0),
+      cityFanoutConcurrency: getPositiveInteger(item.cityFanoutConcurrency ?? item.fanoutConcurrency, 4),
       fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {}),
       requestMap: normalizeFieldMap(item.requestMap || item.queryMap || {}),
       requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {}),
@@ -567,6 +640,13 @@ function getSupplierApiHeaders() {
 function normalizeMethod(value) {
   const method = String(value || 'GET').trim().toUpperCase();
   return method === 'POST' ? 'POST' : 'GET';
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return /^(1|true|yes|on)$/i.test(String(value).trim());
 }
 
 function normalizeHeaders(value) {

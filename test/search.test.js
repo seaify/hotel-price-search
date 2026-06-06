@@ -1809,6 +1809,103 @@ describe('hotel search data', () => {
     }
   });
 
+  it('fans out province live supplier API searches by city', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-fanout-'));
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    const requestedCities = [];
+    const supplierServer = createHttpServer((request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const city = url.searchParams.get('cityName');
+      requestedCities.push(city);
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: `fanout-${city}`,
+            hotelName: `${city}城市扇出供应商酒店`,
+            province: '江苏省',
+            city: `${city}市`,
+            district: city === '南京' ? '秦淮' : '滨湖',
+            price: city === '南京' ? 520 : 430,
+            source: '城市扇出供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '城市扇出供应商',
+      url: `http://127.0.0.1:${address.port}/city-prices`,
+      method: 'GET',
+      cityFanout: true,
+      cityFanoutLimit: 2,
+      cityFanoutConcurrency: 1,
+      requestMap: {
+        cityName: 'city'
+      }
+    });
+
+    try {
+      const result = await searchHotels({
+        city: '江苏省',
+        keyword: '城市扇出',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.total, 2);
+      assert.equal(result.coverageCities, 2);
+      assert.deepEqual(requestedCities, ['南京', '无锡']);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.name).sort(), [
+        '南京城市扇出供应商酒店',
+        '无锡城市扇出供应商酒店'
+      ].sort());
+      assert.equal(result.providers.supplierApi.cityFanoutConfigured, true);
+      assert.equal(result.providers.supplierApi.fanoutRequestCount, 2);
+      assert.equal(result.providers.supplierApi.sourceCount, 2);
+      assert.equal(result.providers.supplierApi.rowCount, 2);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('supports per-source live supplier API config with mixed methods and headers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-config-'));
     const previousFile = process.env.HOTEL_DATA_FILE;

@@ -113,13 +113,15 @@ npm start
 
 ```bash
 export HOTEL_SUPPLIER_API_CONFIG='[
-  {"name":"ctrip","url":"https://example.com/ctrip-live","method":"GET","headers":{"Authorization":"Bearer ctrip_token"},"requestMap":{"cityName":"city","arrivalDate":"checkIn","departureDate":"checkOut","pageNo":"page","pageSize":"pageSize"},"requestDefaults":{"locale":"zh-CN","currency":"CNY"},"responsePath":"data.hotelList","paginationPath":"data.paging","fieldMap":{"id":"offerId","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":["rate.sale","price"],"checkIn":"stay.from","checkOut":"stay.to","bookingUrl":"rate.book"}},
+  {"name":"ctrip","url":"https://example.com/ctrip-live","method":"GET","headers":{"Authorization":"Bearer ctrip_token"},"cityFanout":true,"cityFanoutConcurrency":4,"requestMap":{"cityName":"city","arrivalDate":"checkIn","departureDate":"checkOut","pageNo":"page","pageSize":"pageSize"},"requestDefaults":{"locale":"zh-CN","currency":"CNY"},"responsePath":"data.hotelList","paginationPath":"data.paging","fieldMap":{"id":"offerId","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":["rate.sale","price"],"checkIn":"stay.from","checkOut":"stay.to","bookingUrl":"rate.book"}},
   {"name":"meituan","url":"https://example.com/meituan-live","method":"POST","headers":{"X-Api-Key":"meituan_key"},"requestMap":{"destination.cityName":"city","stay.arrival":"checkIn","stay.departure":"checkOut","occupancy.adultCount":"adults","pagination.pageNo":"page","pagination.pageSize":"pageSize"}}
 ]'
 npm start
 ```
 
 `GET` 默认会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 默认会传同样的 JSON body。若供应商请求字段不同，可用 `requestMap` 改名：左边是供应商需要的请求字段，右边是本站内部查询字段。除原始 `limit` / `offset` 外，还可映射派生字段 `page` 和 `pageSize`，其中 `page = floor(offset / limit) + 1`。GET 会把嵌套路径展平成查询参数，例如 `stay.arrival=2026-06-06`；POST 会生成嵌套 JSON。`requestDefaults` 可放固定请求参数，例如 `locale`、`currency`、`channel`。
+
+如果供应商只支持城市级查价，不支持全国或省级目的地，可以启用 `cityFanout`。查询全国或省份时系统会按城市拆成多次请求，再合并酒店结果；`cityFanoutConcurrency` 控制并发数，`cityFanoutLimit` 可限制一次扇出的城市数量。
 
 供应商如果需要先换 access token，可以在单个源里配置 `auth`。`clientIdEnv` / `clientSecretEnv` 会从服务器环境变量读取密钥，token 会按 `expires_in` 缓存，并自动注入 `Authorization: Bearer ...`：
 
