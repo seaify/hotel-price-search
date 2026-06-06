@@ -250,9 +250,13 @@ export async function searchHotels(params) {
 async function getProviderStatus({ includeCoverage = true } = {}) {
   const localInventory = await getLocalInventoryStatus();
   const coverage = includeCoverage && localInventory.readable ? await getLocalInventoryCoverage(localInventory) : null;
+  const remoteInventory = coverage?.remoteInventory || localInventory.remoteInventory;
+  const sourceErrors = coverage?.sourceErrors || localInventory.sourceErrors || [];
   return {
     localInventory: {
       ...localInventory,
+      remoteInventory,
+      sourceErrors,
       coverage
     },
     amadeus: {

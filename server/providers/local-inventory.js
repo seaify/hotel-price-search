@@ -138,7 +138,14 @@ export async function getLocalInventoryStatus() {
       manifestUrls: remoteManifestUrls.map(redactRemoteUrl),
       timeoutMs: getRemoteTimeoutMs(),
       maxBytes: getRemoteMaxBytes(),
-      cacheSeconds: getInventoryCacheSeconds()
+      cacheSeconds: getInventoryCacheSeconds(),
+      loadCount: 0,
+      manifestCount: 0,
+      okCount: 0,
+      partialCount: 0,
+      failedCount: 0,
+      loadingCount: 0,
+      loads: []
     },
     importedCount: importedFiles.length,
     importsDir: getImportDir(),
@@ -229,7 +236,8 @@ export async function getLocalInventoryCoverage(status = null, params = {}) {
   return {
     ...buildInventoryCoverage(inventory.rows, params),
     sourceCount: inventory.sourceCount,
-    sourceErrors: inventory.sourceErrors
+    sourceErrors: inventory.sourceErrors,
+    remoteInventory: inventory.status.remoteInventory
   };
 }
 
@@ -273,24 +281,47 @@ function getImportDir() {
 async function loadInventorySources(status) {
   const readableFiles = status.files.filter((file) => file.readable);
   const loadedFiles = await Promise.all(readableFiles.map(readInventoryFile));
-  const remoteLoads = await Promise.allSettled([
-    ...getRemoteInventoryUrls().map((url) => readRemoteInventoryUrl(url)),
-    ...getRemoteInventoryManifestUrls().map((url) => readRemoteInventoryManifestUrl(url)),
-    ...getRemoteInventoryConfigSources().map((source) =>
-      readRemoteInventoryUrl(source.url, {
+  const remoteTasks = [
+    ...getRemoteInventoryUrls().map((url) => ({
+      type: 'source',
+      url,
+      name: redactRemoteUrl(url),
+      load: () => readRemoteInventoryUrl(url)
+    })),
+    ...getRemoteInventoryManifestUrls().map((url) => ({
+      type: 'manifest',
+      url,
+      name: `${redactRemoteUrl(url)} 清单`,
+      load: () => readRemoteInventoryManifestUrl(url)
+    })),
+    ...getRemoteInventoryConfigSources().map((source) => ({
+      type: 'config-source',
+      url: source.url,
+      name: source.name,
+      load: () => readRemoteInventoryUrl(source.url, {
         sourceName: source.name,
         fieldMap: source.fieldMap,
-        headers: source.headers
+        headers: source.headers,
+        type: 'config-source'
       })
-    )
-  ]);
+    }))
+  ];
+  const remoteLoads = await Promise.allSettled(remoteTasks.map((task) => task.load()));
   const loadedRemote = remoteLoads
     .filter((result) => result.status === 'fulfilled')
     .map((result) => result.value);
+  const remoteLoadDetails = remoteLoads.flatMap((result, index) => {
+    if (result.status === 'fulfilled') {
+      return result.value.remoteLoads || [result.value.remoteLoad].filter(Boolean);
+    }
+    return result.reason?.remoteLoads?.length
+      ? result.reason.remoteLoads
+      : [buildRemoteInventoryFailedLoad(remoteTasks[index], result.reason)];
+  });
   const sourceErrors = [
     ...remoteLoads
       .filter((result) => result.status === 'rejected')
-      .map((result) => result.reason?.message || '远程供应商文件读取失败。'),
+      .flatMap((result) => result.reason?.sourceErrors || [result.reason?.message || '远程供应商文件读取失败。']),
     ...loadedRemote.flatMap((source) => source.sourceErrors || [])
   ];
   const loaded = [...loadedFiles, ...loadedRemote];
@@ -306,7 +337,11 @@ async function loadInventorySources(status) {
     rows,
     sourceCount: loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0),
     sourceErrors,
-    status: { ...status, sourceErrors }
+    status: {
+      ...status,
+      sourceErrors,
+      remoteInventory: buildRemoteInventoryStatus(status.remoteInventory, remoteLoadDetails)
+    }
   };
 }
 
@@ -549,6 +584,16 @@ async function readRemoteInventoryUrl(url, options = {}) {
   const cached = inventoryCache.get(cacheKey);
   const cacheTtlMs = getInventoryCacheSeconds() * 1000;
   if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    const remoteLoad = buildRemoteInventoryLoad({
+      url,
+      name: options.sourceName || redactRemoteUrl(url),
+      status: 'ok',
+      rowCount: cached.rows.length,
+      type: options.type || 'source',
+      groupUrl: options.groupUrl || url,
+      cache: 'hit',
+      cachedAt: cached.cachedAt
+    });
     return {
       filePath: url,
       sourceLabel: options.sourceName || redactRemoteUrl(url),
@@ -556,7 +601,8 @@ async function readRemoteInventoryUrl(url, options = {}) {
       rows: cached.rows,
       sourceCount: 1,
       cache: 'hit',
-      cachedAt: new Date(cached.cachedAt).toISOString()
+      cachedAt: new Date(cached.cachedAt).toISOString(),
+      remoteLoad
     };
   }
 
@@ -571,7 +617,16 @@ async function readRemoteInventoryUrl(url, options = {}) {
     readable: true,
     rows: cacheRemoteRows(cacheKey, rows),
     sourceCount: 1,
-    cache: 'miss'
+    cache: 'miss',
+    remoteLoad: buildRemoteInventoryLoad({
+      url,
+      name: options.sourceName || redactRemoteUrl(url),
+      status: 'ok',
+      rowCount: rows.length,
+      type: options.type || 'source',
+      groupUrl: options.groupUrl || url,
+      cache: 'miss'
+    })
   };
 }
 
@@ -580,6 +635,7 @@ async function readRemoteInventoryManifestUrl(url) {
   const cached = inventoryCache.get(cacheKey);
   const cacheTtlMs = getInventoryCacheSeconds() * 1000;
   if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    const remoteLoads = markRemoteInventoryLoadsCached(cached.remoteLoads || [], cached.cachedAt);
     return {
       filePath: url,
       sourceLabel: redactRemoteUrl(url),
@@ -587,6 +643,7 @@ async function readRemoteInventoryManifestUrl(url) {
       rows: cached.rows,
       sourceCount: cached.sourceCount,
       sourceErrors: cached.sourceErrors,
+      remoteLoads,
       cache: 'hit',
       cachedAt: new Date(cached.cachedAt).toISOString()
     };
@@ -602,7 +659,9 @@ async function readRemoteInventoryManifestUrl(url) {
     readRemoteInventoryUrl(source.url, {
       sourceName: source.name,
       fieldMap: source.fieldMap,
-      headers: source.headers
+      headers: source.headers,
+      groupUrl: url,
+      type: 'manifest-source'
     })
   ));
   const loaded = loads
@@ -611,17 +670,51 @@ async function readRemoteInventoryManifestUrl(url) {
   const sourceErrors = loads
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason?.message || '远程供应商清单子源读取失败。');
+  const childLoads = loads.map((result, index) =>
+    result.status === 'fulfilled'
+      ? result.value.remoteLoad
+      : buildRemoteInventoryFailedLoad(sources[index], result.reason, { groupUrl: url, type: 'manifest-source' })
+  ).filter(Boolean);
   if (!loaded.length) {
-    throw new Error(`${redactRemoteUrl(url)} 的所有供应商子源读取失败。`);
+    const error = new Error(`${redactRemoteUrl(url)} 的所有供应商子源读取失败。`);
+    error.sourceErrors = sourceErrors;
+    error.remoteLoads = [
+      buildRemoteInventoryLoad({
+        url,
+        name: `${redactRemoteUrl(url)} 清单`,
+        status: 'failed',
+        rowCount: 0,
+        sourceCount: sources.length,
+        failedCount: sourceErrors.length,
+        type: 'manifest',
+        error: error.message
+      }),
+      ...childLoads
+    ];
+    throw error;
   }
 
   const rows = loaded.flatMap((source) => source.rows);
   const sourceCount = loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0);
+  const remoteLoads = [
+    buildRemoteInventoryLoad({
+      url,
+      name: `${redactRemoteUrl(url)} 清单`,
+      status: sourceErrors.length ? 'partial' : 'ok',
+      rowCount: rows.length,
+      sourceCount: sources.length,
+      failedCount: sourceErrors.length,
+      type: 'manifest',
+      cache: 'miss'
+    }),
+    ...childLoads
+  ];
   inventoryCache.set(cacheKey, {
     type: 'remote-manifest',
     rows,
     sourceCount,
     sourceErrors,
+    remoteLoads,
     cachedAt: Date.now()
   });
   return {
@@ -631,8 +724,75 @@ async function readRemoteInventoryManifestUrl(url) {
     rows,
     sourceCount,
     sourceErrors,
+    remoteLoads,
     cache: 'miss'
   };
+}
+
+function buildRemoteInventoryLoad({
+  url,
+  name,
+  status,
+  rowCount = 0,
+  sourceCount = 0,
+  failedCount = 0,
+  type = 'source',
+  groupUrl = '',
+  cache = '',
+  cachedAt = null,
+  error = ''
+}) {
+  const safeUrl = redactRemoteUrl(url || '');
+  const safeGroupUrl = redactRemoteUrl(groupUrl || url || '');
+  return {
+    key: `${type}:${safeGroupUrl}:${safeUrl || name || ''}`,
+    url: safeUrl,
+    name: name || safeUrl || '远程价格源',
+    status,
+    rowCount: Number(rowCount || 0),
+    sourceCount: Number(sourceCount || 0),
+    failedCount: Number(failedCount || 0),
+    groupUrl: safeGroupUrl,
+    type,
+    ...(cache ? { cache } : {}),
+    ...(cachedAt ? { cachedAt: new Date(cachedAt).toISOString() } : {}),
+    ...(error ? { error } : {})
+  };
+}
+
+function buildRemoteInventoryFailedLoad(source = {}, error, options = {}) {
+  return buildRemoteInventoryLoad({
+    url: source.url || '',
+    name: source.name || redactRemoteUrl(source.url || ''),
+    status: 'failed',
+    rowCount: 0,
+    type: options.type || source.type || 'source',
+    groupUrl: options.groupUrl || source.groupUrl || source.url || '',
+    error: error?.message || '远程供应商文件读取失败。'
+  });
+}
+
+function buildRemoteInventoryStatus(base = {}, loads = []) {
+  const normalizedLoads = loads.filter(Boolean);
+  const sourceLoads = normalizedLoads.filter((load) => load.type !== 'manifest');
+  return {
+    ...base,
+    loadCount: sourceLoads.length,
+    manifestCount: normalizedLoads.length - sourceLoads.length,
+    okCount: sourceLoads.filter((load) => load.status === 'ok').length,
+    partialCount: sourceLoads.filter((load) => load.status === 'partial').length,
+    failedCount: sourceLoads.filter((load) => load.status === 'failed').length,
+    loadingCount: sourceLoads.filter((load) => load.status === 'loading').length,
+    loads: normalizedLoads
+  };
+}
+
+function markRemoteInventoryLoadsCached(loads, cachedAt) {
+  return loads.map((load) => ({
+    ...load,
+    cache: 'hit',
+    cachedAt: new Date(cachedAt).toISOString()
+  }));
 }
 
 async function fetchRemoteInventoryContent(url, options = {}) {

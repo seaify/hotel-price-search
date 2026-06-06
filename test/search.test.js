@@ -3131,6 +3131,12 @@ describe('hotel search data', () => {
       assert.equal(result.providers.localInventory.remoteCount, 1);
       assert.equal(result.providers.localInventory.readableCount, 1);
       assert.equal(result.providers.localInventory.remoteInventory.urls[0], `http://127.0.0.1:${address.port}/remote.csv?token=REDACTED`);
+      assert.equal(result.providers.localInventory.remoteInventory.loadCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.okCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.failedCount, 0);
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].rowCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].cache, 'miss');
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].url, `http://127.0.0.1:${address.port}/remote.csv?token=REDACTED`);
 
       const cachedResult = await searchHotels({
         city: '深圳',
@@ -3139,6 +3145,7 @@ describe('hotel search data', () => {
         checkOut: '2026-06-07'
       });
       assert.equal(cachedResult.total, 1);
+      assert.equal(cachedResult.providers.localInventory.remoteInventory.loads[0].cache, 'hit');
       assert.equal(requestCount, 1);
     } finally {
       clearInventoryCache();
@@ -3314,6 +3321,33 @@ describe('hotel search data', () => {
       assert.equal(result.providers.localInventory.remoteCount, 1);
       assert.equal(result.providers.localInventory.remoteInventory.manifestUrlCount, 1);
       assert.equal(result.providers.localInventory.remoteInventory.manifestUrls[0], `http://127.0.0.1:${address.port}/manifest.json`);
+      assert.equal(result.providers.localInventory.remoteInventory.loadCount, 2);
+      assert.equal(result.providers.localInventory.remoteInventory.manifestCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.okCount, 2);
+      assert.equal(result.providers.localInventory.remoteInventory.failedCount, 0);
+      assert.ok(result.providers.localInventory.remoteInventory.loads.some((load) =>
+        load.type === 'manifest' && load.rowCount === 2 && load.sourceCount === 2
+      ));
+      assert.ok(result.providers.localInventory.remoteInventory.loads.some((load) =>
+        load.name === '映射远程供应商' && load.rowCount === 1
+      ));
+
+      const appServer = createHotelServer();
+      await new Promise((resolve) => appServer.listen(0, resolve));
+      try {
+        const appAddress = appServer.address();
+        const statusResponse = await fetch(`http://127.0.0.1:${appAddress.port}/api/status`);
+        const status = await statusResponse.json();
+        assert.equal(statusResponse.status, 200);
+        assert.equal(status.localInventory.remoteInventory.loadCount, 2);
+        assert.equal(status.localInventory.remoteInventory.manifestCount, 1);
+        assert.equal(status.localInventory.remoteInventory.okCount, 2);
+        assert.ok(status.localInventory.remoteInventory.loads.some((load) =>
+          load.type === 'manifest' && load.rowCount === 2
+        ));
+      } finally {
+        await new Promise((resolve, reject) => appServer.close((error) => error ? reject(error) : resolve()));
+      }
 
       const mapped = result.hotels.find((hotel) => hotel.name === '厦门Manifest远程映射酒店');
       assert.ok(mapped);
@@ -3493,6 +3527,10 @@ describe('hotel search data', () => {
       assert.equal(result.providers.localInventory.remoteCount, 1);
       assert.equal(result.providers.localInventory.remoteInventory.configSourceCount, 1);
       assert.equal(result.providers.localInventory.remoteInventory.manifestUrlCount, 0);
+      assert.equal(result.providers.localInventory.remoteInventory.loadCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.okCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].name, '内联配置供应商');
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].rowCount, 1);
       assert.match(result.notice, /1 个已接入的供应商库存源/);
     } finally {
       clearInventoryCache();
@@ -3588,6 +3626,10 @@ describe('hotel search data', () => {
       assert.ok(result.total > 20);
       assert.equal(result.providers.localInventory.remoteCount, 1);
       assert.equal(result.providers.localInventory.sourceErrors.length, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.loadCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.failedCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.loads[0].status, 'failed');
+      assert.match(result.providers.localInventory.remoteInventory.loads[0].error, /HTTP 503/);
       assert.match(result.notice, /远程供应商文件读取失败|回退到备用数据源/);
     } finally {
       clearInventoryCache();
