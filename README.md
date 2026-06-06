@@ -447,7 +447,7 @@ npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-
 
 如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片。输入支持 CSV/JSON/JSONL/NDJSON/XLSX，XLSX 会合并所有工作表；也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz`；如果供应商给的是 ZIP 包，包内可以放多份 CSV/JSON/JSONL/NDJSON/XLSX，发布脚本会自动展开并合并拆分：
 
-供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
+供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。发布脚本也会自动识别常见中文表头，例如 `报价ID`、`酒店名称`、`省份`、`城市`、`供应商名称`、`最低价`、`入住日期`、`离店日期`、`是否可售`、`更新时间`、`预订链接`，拆分时会同时写入标准字段，方便 GitHub Pages 静态页直接读取。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
 
 ```bash
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv

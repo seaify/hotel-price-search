@@ -55,6 +55,57 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('canonicalizes common Chinese supplier headers while writing city shards', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-zh-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide-zh.csv');
+    await writeFile(inputFile, [
+      '报价ID,标准酒店ID,酒店名称,省份,城市,行政区,酒店地址,星级,用户评分,点评数,最低价,总价,币种,酒店设施,推荐标签,付款方式,取消政策,供应商名称,入住日期,离店日期,是否可售,更新时间,预订链接',
+      'zh-sz-1,CN-GD-SZ-ZH-1,深圳中文拆分酒店,广东省,深圳市,南山,深圳市南山区中文路 1 号,5,4.8,1200,588,1176,CNY,免费停车;早餐,真实库存,在线付,免费取消,中文发布供应商,2026年06月01日,2026年12月31日,可售,2026年06月06日 12:00:00Z,https://example.com/zh-sz-1',
+      'zh-gz-1,CN-GD-GZ-ZH-1,广州中文拆分酒店,广东省,广州市,天河,广州市天河区中文路 2 号,4,4.6,800,488,976,CNY,健身房,真实库存,到店付,不可取消,中文发布供应商,2026年06月01日,2026年12月31日,有房,2026年06月06日 11:00:00Z,https://example.com/zh-gz-1',
+      'zh-bad-1,CN-UNKNOWN-ZH-1,未知中文酒店,,,未知地址,,,,288,288,CNY,,,,中文发布供应商,2026年06月01日,2026年12月31日,可售,2026年06月06日 10:00:00Z,https://example.com/zh-bad-1'
+    ].join('\n'));
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        clean: true
+      });
+
+      assert.equal(result.rowCount, 3);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 1);
+      assert.equal(result.manifest.sources.length, 2);
+      assert.ok(result.manifest.sources.every((source) => source.name === '中文发布供应商'));
+
+      const shenzhenSource = result.manifest.sources.find((source) => source.cities?.includes('深圳'));
+      assert.ok(shenzhenSource);
+      assert.equal(shenzhenSource.pricedRowCount, 1);
+      assert.equal(shenzhenSource.pricedHotelCount, 1);
+      assert.equal(shenzhenSource.updatedAt, '2026-06-06T12:00:00.000Z');
+
+      const shenzhenRows = (await readFile(join(root, 'public', shenzhenSource.url), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      assert.equal(shenzhenRows[0].id, 'zh-sz-1');
+      assert.equal(shenzhenRows[0].masterHotelId, 'CN-GD-SZ-ZH-1');
+      assert.equal(shenzhenRows[0].name, '深圳中文拆分酒店');
+      assert.equal(shenzhenRows[0].province, '广东');
+      assert.equal(shenzhenRows[0].city, '深圳');
+      assert.equal(shenzhenRows[0].district, '南山');
+      assert.equal(shenzhenRows[0].price, '588');
+      assert.equal(shenzhenRows[0].totalPrice, '1176');
+      assert.equal(shenzhenRows[0].currency, 'CNY');
+      assert.equal(shenzhenRows[0].providerName, '中文发布供应商');
+      assert.equal(shenzhenRows[0].source, '中文发布供应商');
+      assert.equal(shenzhenRows[0].bookingUrl, 'https://example.com/zh-sz-1');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads a remote supplier CSV URL before writing city shards', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-remote-shards-'));
     const inventoryServer = await startInventoryServer([

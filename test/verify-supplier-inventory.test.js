@@ -53,6 +53,47 @@ describe('supplier inventory verifier', () => {
     }
   });
 
+  it('passes a nationwide supplier CSV with common Chinese headers without a field map', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-zh-pass-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide-zh.csv');
+    await writeFile(inputFile, [
+      '报价ID,酒店名称,省份,城市,供应商名称,最低价,入住日期,离店日期,是否可售,更新时间',
+      ...cityCatalog.map(({ province, city }, index) => [
+        `zh-hotel-${index + 1}`,
+        `${city}中文验收酒店`,
+        province,
+        city,
+        '中文验收供应商',
+        420 + index,
+        '2026年06月01日',
+        '2026年12月31日',
+        '可售',
+        '2026年06月06日 12:00:00Z'
+      ].join(','))
+    ].join('\n'));
+
+    try {
+      const result = await verifySupplierInventory({
+        cwd: root,
+        inputFiles: [inputFile],
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        minTotalHotels: cityCatalog.length,
+        minTotalPricedRows: cityCatalog.length,
+        maxPriceAgeHours: 24,
+        referenceTime: '2026-06-06T18:00:00Z'
+      });
+      assert.equal(result.passed, true);
+      assert.equal(result.split.skippedRowCount, 0);
+      assert.equal(result.coverage.coveredCities, cityCatalog.length);
+      assert.equal(result.coverage.pricedHotelCount, cityCatalog.length);
+      assert.equal(result.coverage.citiesBelowPriceMinimums.length, 0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('uses field map files while verifying non-standard supplier exports', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-field-map-'));
     await mkdir(join(root, 'supplier'), { recursive: true });

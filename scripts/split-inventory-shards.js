@@ -9,6 +9,34 @@ import { extractZipEntries, isZipBuffer } from './zip-archive.js';
 const defaultOutputDir = 'public/inventory';
 const defaultManifestPath = 'public/hotel-inventory.manifest.json';
 const supportedInventoryExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson', '.xlsx']);
+const canonicalInventoryFields = [
+  'id',
+  'masterHotelId',
+  'name',
+  'province',
+  'city',
+  'district',
+  'address',
+  'star',
+  'rating',
+  'reviews',
+  'price',
+  'totalPrice',
+  'originalPrice',
+  'currency',
+  'amenities',
+  'tags',
+  'image',
+  'payment',
+  'cancellation',
+  'providerName',
+  'checkIn',
+  'checkOut',
+  'available',
+  'updatedAt',
+  'bookingUrl',
+  'roomName'
+];
 
 export async function splitInventoryShards(options = {}) {
   const rootDir = resolve(options.rootDir || process.cwd());
@@ -46,7 +74,7 @@ export async function splitInventoryShards(options = {}) {
           city: location.city,
           rows: []
         };
-        shard.rows.push(row);
+        shard.rows.push(addCanonicalInventoryFields(row, location));
         shards.set(key, shard);
       });
     }
@@ -226,14 +254,31 @@ async function loadFieldMap(value, rootDir) {
 }
 
 function mapInventoryRow(row, fieldMap = {}) {
-  if (!fieldMap || !Object.keys(fieldMap).length) return row;
   const mapped = { ...row };
-  Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
-    const value = getMappedValue(row, sourcePath);
-    if (value !== undefined && value !== null && String(value).trim() !== '') {
-      mapped[targetField] = value;
-    }
+  if (fieldMap && Object.keys(fieldMap).length) {
+    Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
+      const value = getMappedValue(row, sourcePath);
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        mapped[targetField] = value;
+      }
+    });
+  }
+  return mapped;
+}
+
+function addCanonicalInventoryFields(row, location = null) {
+  const mapped = { ...row };
+  canonicalInventoryFields.forEach((field) => {
+    const value = pick(mapped, field);
+    if (value !== undefined && mapped[field] === undefined) mapped[field] = value;
   });
+  if (location?.province) mapped.province = location.province;
+  if (location?.city) mapped.city = location.city;
+  const providerName = pick(mapped, 'providerName');
+  if (providerName !== undefined) {
+    if (mapped.providerName === undefined) mapped.providerName = providerName;
+    if (mapped.source === undefined) mapped.source = providerName;
+  }
   return mapped;
 }
 
