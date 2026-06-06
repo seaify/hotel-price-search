@@ -5,6 +5,7 @@ import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
 const defaultSupplierApiTimeoutMs = 10_000;
 const defaultSupplierApiCacheSeconds = 0;
+const defaultSupplierApiStaleCacheSeconds = 0;
 const defaultSupplierApiCacheMaxEntries = 1000;
 const defaultSupplierApiRetryCount = 0;
 const defaultSupplierApiRetryDelayMs = 250;
@@ -33,8 +34,10 @@ export function getSupplierApiStatus() {
     methods,
     timeoutMs: firstSource?.timeoutMs || getSupplierApiTimeoutMs(),
     cacheSeconds: firstSource?.cacheSeconds ?? getSupplierApiCacheSeconds(),
+    staleCacheSeconds: firstSource?.staleCacheSeconds ?? getSupplierApiStaleCacheSeconds(),
     cacheMaxEntries: getSupplierApiCacheMaxEntries(),
     cacheConfigured: sources.some((source) => Number(source.cacheSeconds || 0) > 0),
+    staleCacheConfigured: sources.some((source) => Number(source.staleCacheSeconds || 0) > 0),
     retryCount: firstSource?.retryCount ?? getSupplierApiRetryCount(),
     retryConfigured: sources.some((source) => Number(source.retryCount || 0) > 0),
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
@@ -83,6 +86,7 @@ export async function searchSupplierApiInventory(params) {
     fanoutRequestCount: loaded.reduce((sum, source) => sum + Number(source.fanoutRequestCount || 0), 0),
     cacheHitCount: loaded.reduce((sum, source) => sum + Number(source.cacheHitCount || 0), 0),
     cacheMissCount: loaded.reduce((sum, source) => sum + Number(source.cacheMissCount || 0), 0),
+    cacheStaleCount: loaded.reduce((sum, source) => sum + Number(source.cacheStaleCount || 0), 0),
     retryAttemptCount: loaded.reduce((sum, source) => sum + Number(source.retryAttemptCount || 0), 0)
   };
   const hotels = searchInventoryRows(rows, params, {
@@ -256,7 +260,8 @@ async function readSupplierApiSourceLoads(source, params) {
     .map((result) => result.value);
   const sourceErrors = loads
     .filter((result) => result.status === 'rejected')
-    .map((result) => result.reason?.message || '实时供应商城市请求失败。');
+    .map((result) => result.reason?.message || '实时供应商城市请求失败。')
+    .concat(loaded.flatMap((item) => item.sourceErrors || []));
   if (!loaded.length) {
     throw new Error(`${source.name} 的城市扇出请求全部失败。`);
   }
@@ -270,6 +275,7 @@ async function readSupplierApiSourceLoads(source, params) {
     fanoutRequestCount: cities.length,
     cacheHitCount: loaded.reduce((sum, item) => sum + Number(item.cacheHitCount || 0), 0),
     cacheMissCount: loaded.reduce((sum, item) => sum + Number(item.cacheMissCount || 0), 0),
+    cacheStaleCount: loaded.reduce((sum, item) => sum + Number(item.cacheStaleCount || 0), 0),
     retryAttemptCount: loaded.reduce((sum, item) => sum + Number(item.retryAttemptCount || 0), 0)
   };
 }
@@ -277,26 +283,42 @@ async function readSupplierApiSourceLoads(source, params) {
 async function readSupplierApiSource(source, params) {
   const { url, init } = await buildSupplierApiRequest(source, params);
   const cacheSeconds = getSupplierApiSourceCacheSeconds(source);
-  const cacheKey = cacheSeconds > 0 ? buildSupplierApiCacheKey(source, url, init) : '';
+  const staleCacheSeconds = getSupplierApiSourceStaleCacheSeconds(source);
+  const cacheKey = cacheSeconds > 0 || staleCacheSeconds > 0
+    ? buildSupplierApiCacheKey(source, url, init)
+    : '';
+  const cached = cacheKey ? supplierApiResponseCache.get(cacheKey) : null;
   if (cacheKey) {
-    const cached = supplierApiResponseCache.get(cacheKey);
     if (cached && Date.now() - cached.cachedAt < cacheSeconds * 1000) {
-      const parsed = cloneSupplierApiParsedResponse(cached.parsed);
-      return {
-        ...source,
-        rows: parsed.rows,
-        pagination: parsed.pagination,
-        cache: 'hit',
-        cacheHitCount: 1,
-        cacheMissCount: 0,
-        cachedAt: new Date(cached.cachedAt).toISOString()
-      };
+      return buildSupplierApiCachedSourceResult(source, cached, 'hit');
     }
   }
 
-  const { response, text, retryAttemptCount } = await fetchSupplierApiResponse(source, url, init);
+  let response;
+  let text;
+  let retryAttemptCount = 0;
+  try {
+    const fetched = await fetchSupplierApiResponse(source, url, init);
+    response = fetched.response;
+    text = fetched.text;
+    retryAttemptCount = fetched.retryAttemptCount;
+  } catch (error) {
+    const staleResult = buildSupplierApiStaleCacheResult(source, cached, cacheSeconds, staleCacheSeconds, {
+      retryAttemptCount: Number(error?.retryAttemptCount || 0),
+      errorMessage: error?.message || `${redactUrl(url)} 实时供应商请求失败。`
+    });
+    if (staleResult) return staleResult;
+    throw error;
+  }
+
   if (!response.ok) {
-    throw new Error(`${redactUrl(url)} 返回 HTTP ${response.status}`);
+    const errorMessage = `${redactUrl(url)} 返回 HTTP ${response.status}`;
+    const staleResult = buildSupplierApiStaleCacheResult(source, cached, cacheSeconds, staleCacheSeconds, {
+      retryAttemptCount,
+      errorMessage
+    });
+    if (staleResult) return staleResult;
+    throw new Error(errorMessage);
   }
 
   const format = getSupplierApiResponseFormat(url, response.headers.get('content-type') || '');
@@ -311,6 +333,7 @@ async function readSupplierApiSource(source, params) {
     cache: cacheKey ? 'miss' : 'disabled',
     cacheHitCount: 0,
     cacheMissCount: cacheKey ? 1 : 0,
+    cacheStaleCount: 0,
     retryAttemptCount
   };
 }
@@ -339,7 +362,9 @@ async function fetchSupplierApiResponse(source, url, init) {
     }
   }
 
-  throw lastError || new Error(`${redactUrl(url)} 实时供应商请求失败。`);
+  const error = lastError || new Error(`${redactUrl(url)} 实时供应商请求失败。`);
+  error.retryAttemptCount = retryAttemptCount;
+  throw error;
 }
 
 function getRetryDelayMs(response, fallbackMs) {
@@ -895,6 +920,7 @@ function getSupplierApiSources() {
   const method = getSupplierApiMethod();
   const headers = getSupplierApiHeaders();
   const timeoutMs = getSupplierApiTimeoutMs();
+  const staleCacheSeconds = getSupplierApiStaleCacheSeconds();
   const retryCount = getSupplierApiRetryCount();
   const retryDelayMs = getSupplierApiRetryDelayMs();
   const retryStatusCodes = getSupplierApiRetryStatusCodes();
@@ -906,6 +932,7 @@ function getSupplierApiSources() {
     headers,
     timeoutMs,
     cacheSeconds: getSupplierApiCacheSeconds(),
+    staleCacheSeconds,
     retryCount,
     retryDelayMs,
     retryStatusCodes
@@ -926,6 +953,10 @@ function getSupplierApiConfigSources() {
       headers: normalizeHeaders(item.headers || {}),
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
       cacheSeconds: getNonNegativeInteger(item.cacheSeconds ?? item.cacheTtlSeconds ?? item.responseCacheSeconds, getSupplierApiCacheSeconds()),
+      staleCacheSeconds: getNonNegativeInteger(
+        item.staleCacheSeconds ?? item.staleTtlSeconds ?? item.staleIfErrorSeconds,
+        getSupplierApiStaleCacheSeconds()
+      ),
       retryCount: getNonNegativeInteger(item.retryCount ?? item.retries ?? item.retryAttempts, getSupplierApiRetryCount()),
       retryDelayMs: getNonNegativeInteger(item.retryDelayMs ?? item.retryDelay ?? item.retryBackoffMs, getSupplierApiRetryDelayMs()),
       retryStatusCodes: normalizeStatusCodes(item.retryStatusCodes || item.retryStatuses, getSupplierApiRetryStatusCodes()),
@@ -1351,6 +1382,14 @@ function getSupplierApiCacheSeconds() {
   return getNonNegativeInteger(process.env.HOTEL_SUPPLIER_API_CACHE_SECONDS, defaultSupplierApiCacheSeconds);
 }
 
+function getSupplierApiSourceStaleCacheSeconds(source = {}) {
+  return getNonNegativeInteger(source.staleCacheSeconds, getSupplierApiStaleCacheSeconds());
+}
+
+function getSupplierApiStaleCacheSeconds() {
+  return getNonNegativeInteger(process.env.HOTEL_SUPPLIER_API_STALE_CACHE_SECONDS, defaultSupplierApiStaleCacheSeconds);
+}
+
 function buildSupplierApiCacheKey(source, url, init) {
   return [
     'supplier-api',
@@ -1359,6 +1398,38 @@ function buildSupplierApiCacheKey(source, url, init) {
     url.toString(),
     init.body || ''
   ].join('|');
+}
+
+function buildSupplierApiCachedSourceResult(source, cached, cacheState, options = {}) {
+  const parsed = cloneSupplierApiParsedResponse(cached.parsed);
+  const cacheAgeSeconds = Math.max(0, Math.round((Date.now() - cached.cachedAt) / 1000));
+  return {
+    ...source,
+    rows: parsed.rows,
+    pagination: parsed.pagination,
+    cache: cacheState,
+    cacheHitCount: cacheState === 'hit' ? 1 : 0,
+    cacheMissCount: 0,
+    cacheStaleCount: cacheState === 'stale' ? 1 : 0,
+    retryAttemptCount: Number(options.retryAttemptCount || 0),
+    cachedAt: new Date(cached.cachedAt).toISOString(),
+    cacheAgeSeconds,
+    ...(options.sourceErrors?.length ? { sourceErrors: options.sourceErrors } : {})
+  };
+}
+
+function buildSupplierApiStaleCacheResult(source, cached, cacheSeconds, staleCacheSeconds, options = {}) {
+  if (!canUseSupplierApiStaleCache(cached, cacheSeconds, staleCacheSeconds)) return null;
+  const errorMessage = options.errorMessage || `${source.name || '实时供应商'} 请求失败。`;
+  return buildSupplierApiCachedSourceResult(source, cached, 'stale', {
+    retryAttemptCount: options.retryAttemptCount,
+    sourceErrors: [`${source.name || '实时供应商'} 请求失败，已使用过期缓存：${errorMessage}`]
+  });
+}
+
+function canUseSupplierApiStaleCache(cached, cacheSeconds, staleCacheSeconds) {
+  if (!cached || staleCacheSeconds <= 0) return false;
+  return Date.now() - cached.cachedAt < (cacheSeconds + staleCacheSeconds) * 1000;
 }
 
 function setSupplierApiResponseCache(cacheKey, parsed) {

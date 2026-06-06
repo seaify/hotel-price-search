@@ -1396,6 +1396,7 @@ describe('hotel search data', () => {
       'HOTEL_SUPPLIER_API_METHOD',
       'HOTEL_SUPPLIER_API_HEADERS',
       'HOTEL_SUPPLIER_API_CACHE_SECONDS',
+      'HOTEL_SUPPLIER_API_STALE_CACHE_SECONDS',
       'AMADEUS_CLIENT_ID',
       'AMADEUS_CLIENT_SECRET'
     ];
@@ -1468,6 +1469,110 @@ describe('hotel search data', () => {
     }
   });
 
+  it('uses stale cached live supplier API responses after transient failures', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-stale-cache-'));
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'HOTEL_SUPPLIER_API_CACHE_SECONDS',
+      'HOTEL_SUPPLIER_API_STALE_CACHE_SECONDS',
+      'HOTEL_SUPPLIER_API_RETRY_COUNT',
+      'HOTEL_SUPPLIER_API_RETRY_DELAY_MS',
+      'HOTEL_SUPPLIER_API_RETRY_STATUS_CODES',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    let requestCount = 0;
+    const supplierServer = createHttpServer((request, response) => {
+      requestCount += 1;
+      if (requestCount === 2) {
+        response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ error: 'temporarily_unavailable' }));
+        return;
+      }
+
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: 'stale-live-001',
+            hotelName: '深圳过期缓存实时供应商酒店',
+            province: '广东省',
+            city: '深圳市',
+            price: 710,
+            source: '过期缓存供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '过期缓存供应商',
+      url: `http://127.0.0.1:${address.port}/stale-prices`,
+      method: 'GET',
+      cacheSeconds: 0,
+      staleCacheSeconds: 60,
+      retryCount: 0
+    });
+
+    try {
+      const query = {
+        city: '深圳',
+        keyword: '过期缓存实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      };
+      const first = await searchHotels(query);
+      const second = await searchHotels(query);
+
+      assert.equal(first.source, 'supplier-api');
+      assert.equal(second.source, 'supplier-api');
+      assert.equal(first.total, 1);
+      assert.equal(second.total, 1);
+      assert.equal(requestCount, 2);
+      assert.equal(first.providers.supplierApi.staleCacheConfigured, true);
+      assert.equal(first.providers.supplierApi.cacheMissCount, 1);
+      assert.equal(first.providers.supplierApi.cacheStaleCount, 0);
+      assert.equal(second.providers.supplierApi.cacheHitCount, 0);
+      assert.equal(second.providers.supplierApi.cacheStaleCount, 1);
+      assert.equal(second.hotels[0].name, '深圳过期缓存实时供应商酒店');
+      assert.ok(second.providers.supplierApi.sourceErrors.some((message) => /已使用过期缓存/.test(message)));
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('retries transient live supplier API failures', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-retry-'));
     const envKeys = [
@@ -1486,6 +1591,7 @@ describe('hotel search data', () => {
       'HOTEL_SUPPLIER_API_NAMES',
       'HOTEL_SUPPLIER_API_METHOD',
       'HOTEL_SUPPLIER_API_HEADERS',
+      'HOTEL_SUPPLIER_API_STALE_CACHE_SECONDS',
       'HOTEL_SUPPLIER_API_RETRY_COUNT',
       'HOTEL_SUPPLIER_API_RETRY_DELAY_MS',
       'HOTEL_SUPPLIER_API_RETRY_STATUS_CODES',

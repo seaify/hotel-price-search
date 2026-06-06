@@ -177,6 +177,7 @@ curl -OJ 'http://localhost:5174/api/supplier-destinations.csv'
 
 ```bash
 export HOTEL_SUPPLIER_API_CACHE_SECONDS=30
+export HOTEL_SUPPLIER_API_STALE_CACHE_SECONDS=300
 export HOTEL_SUPPLIER_API_CACHE_MAX_ENTRIES=1000
 ```
 
@@ -184,9 +185,12 @@ export HOTEL_SUPPLIER_API_CACHE_MAX_ENTRIES=1000
 {
   "name": "ctrip",
   "url": "https://example.com/ctrip-live",
-  "cacheSeconds": 30
+  "cacheSeconds": 30,
+  "staleCacheSeconds": 300
 }
 ```
+
+`staleCacheSeconds` 只在同条件最近成功查过、但本次供应商接口失败时生效；它会返回标记为过期缓存的结果，并在状态里记录 `cacheStaleCount` 和对应错误信息。也可用别名 `staleTtlSeconds` 或 `staleIfErrorSeconds`。
 
 供应商偶发 429/5xx 或网络错误时，可开启短重试。默认 `0` 次关闭；会优先遵守供应商返回的 `Retry-After`：
 
