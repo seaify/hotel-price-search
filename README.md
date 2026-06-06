@@ -391,7 +391,7 @@ npm run build:pages
 npm run build:pages
 ```
 
-`build:pages` 会先扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市，刷新 `public/hotel-inventory.manifest.json`，再递归复制到 `docs/`。如果库存文件托管在独立对象存储，可用 `--base-url` 手动生成绝对 URL：
+`build:pages` 会先扫描 `public/inventory/**/*.{csv,json,jsonl,ndjson}`，自动读取每个分片覆盖的城市和逐城市酒店数，刷新 `public/hotel-inventory.manifest.json`，再递归复制到 `docs/`。如果库存文件托管在独立对象存储，可用 `--base-url` 手动生成绝对 URL：
 
 ```bash
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
@@ -411,7 +411,9 @@ npm run build:pages
 ```bash
 npm run audit:inventory-coverage
 npm run audit:inventory-coverage -- --require-all-cities --missing-csv missing-cities.csv
+npm run audit:inventory-coverage -- --require-all-cities --require-city-hotels
 HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true npm run build:pages
 ```
 
 `--require-all-cities` 和 `HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true` 会在任一城市缺库存分片、存在未知城市名或存在未标注 `cities` / `provinces` 的源时返回非零退出码，防止“全国都要有”的数据目标被漏掉。
+严格 Pages 发布模式还会要求 manifest 里每个城市都有 `cityStats.hotelCount > 0`。使用 `public/inventory/` 分片自动生成清单时会自动写入这份证据；如果手写外部供应商 URL 清单，也需要补齐 `cityStats` 才能通过严格发布。

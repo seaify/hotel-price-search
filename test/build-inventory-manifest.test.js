@@ -32,6 +32,10 @@ describe('inventory manifest builder', () => {
       assert.equal(south.rowCount, 2);
       assert.equal(south.hotelCount, 2);
       assert.equal(south.provinces, undefined);
+      assert.deepEqual(south.cityStats, [
+        { province: '广东', city: '广州', rowCount: 1, hotelCount: 1 },
+        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1 }
+      ]);
 
       const beijing = manifest.sources.find((source) => source.url === 'inventory/beijing.jsonl');
       assert.ok(beijing);
@@ -39,6 +43,9 @@ describe('inventory manifest builder', () => {
       assert.deepEqual(beijing.cities, ['北京']);
       assert.equal(beijing.rowCount, 2);
       assert.equal(beijing.hotelCount, 2);
+      assert.deepEqual(beijing.cityStats, [
+        { province: '北京', city: '北京', rowCount: 2, hotelCount: 2 }
+      ]);
 
       const written = JSON.parse(await readFile(join(root, 'public', 'hotel-inventory.manifest.json'), 'utf8'));
       assert.deepEqual(written.sources, manifest.sources);

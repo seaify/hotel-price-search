@@ -1203,10 +1203,18 @@ function summarizeRemoteInventoryManifestCoverage() {
   const cityByName = new Map(cities.map((item) => [item.city, item]));
   const coveredCitySet = new Set();
   const sourceNamesByCity = new Map();
+  const rowCountByCity = new Map();
+  const hotelCountByCity = new Map();
   const sourceCoverage = [];
 
   sources.forEach((source) => {
     const citySet = new Set();
+    (source.cityStats || []).forEach((stat) => {
+      if (!cityByName.has(stat.city)) return;
+      citySet.add(stat.city);
+      rowCountByCity.set(stat.city, (rowCountByCity.get(stat.city) || 0) + Number(stat.rowCount || 0));
+      hotelCountByCity.set(stat.city, (hotelCountByCity.get(stat.city) || 0) + Number(stat.hotelCount || 0));
+    });
     (source.cities || []).forEach((city) => {
       if (cityByName.has(city)) citySet.add(city);
     });
@@ -1219,10 +1227,14 @@ function summarizeRemoteInventoryManifestCoverage() {
       coveredCitySet.add(city);
       sourceNamesByCity.set(city, [...new Set([...(sourceNamesByCity.get(city) || []), source.name || '供应商'])]);
     });
+    const sourceRowCount = Number(source.rowCount || 0)
+      || (source.cityStats || []).reduce((sum, stat) => sum + Number(stat.rowCount || 0), 0);
+    const sourceHotelCount = Number(source.hotelCount || 0)
+      || (source.cityStats || []).reduce((sum, stat) => sum + Number(stat.hotelCount || 0), 0);
     sourceCoverage.push({
       sourceName: source.name || '供应商',
-      rowCount: Number(source.rowCount || 0),
-      hotelCount: Number(source.hotelCount || 0),
+      rowCount: sourceRowCount,
+      hotelCount: sourceHotelCount,
       coveredCities: citySet.size,
       totalCities: cities.length,
       coverageRatio: cities.length ? Number((citySet.size / cities.length).toFixed(4)) : 0,
@@ -1239,8 +1251,8 @@ function summarizeRemoteInventoryManifestCoverage() {
     province,
     city,
     covered: coveredCitySet.has(city),
-    rowCount: 0,
-    hotelCount: 0,
+    rowCount: rowCountByCity.get(city) || 0,
+    hotelCount: hotelCountByCity.get(city) || 0,
     sourceCount: sourceNamesByCity.get(city)?.length || 0,
     sources: sourceNamesByCity.get(city) || []
   }));
@@ -1428,7 +1440,8 @@ function normalizeRemoteInventoryManifestSource(source, index, manifestUrl) {
     cities: scopedDestinations.cities,
     provinces: scopedDestinations.provinces,
     rowCount: Number(source.rowCount || source.rows || 0),
-    hotelCount: Number(source.hotelCount || source.hotels || 0)
+    hotelCount: Number(source.hotelCount || source.hotels || 0),
+    cityStats: normalizeRemoteInventoryCityStats(source.cityStats || source.cityCoverage || source.coverageByCity || [])
   };
 }
 
@@ -1470,6 +1483,28 @@ function normalizeRemoteInventorySourceDestinations(source) {
     cities: [...cities],
     provinces: [...provinces]
   };
+}
+
+function normalizeRemoteInventoryCityStats(rawStats) {
+  const values = Array.isArray(rawStats)
+    ? rawStats
+    : Object.entries(rawStats || {}).map(([city, value]) => (
+      value && typeof value === 'object' ? { city, ...value } : { city, hotelCount: value }
+    ));
+  return values
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const city = findStaticCity(item.city || item.cityName || item.destination || item.name);
+      if (!city) return null;
+      return {
+        province: findStaticProvince(item.province || item.provinceName) || city.province,
+        city: city.city,
+        rowCount: Number(item.rowCount ?? item.rows ?? item.rateCount ?? item.priceCount ?? 0),
+        hotelCount: Number(item.hotelCount ?? item.hotels ?? 0)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.province.localeCompare(b.province, 'zh-CN') || a.city.localeCompare(b.city, 'zh-CN'));
 }
 
 function collectRemoteInventoryDestinationValues(values) {

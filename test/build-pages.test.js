@@ -30,6 +30,9 @@ describe('GitHub Pages builder', () => {
       assert.deepEqual(manifest.sources[0].cities, ['深圳']);
       assert.equal(manifest.sources[0].rowCount, 1);
       assert.equal(manifest.sources[0].hotelCount, 1);
+      assert.deepEqual(manifest.sources[0].cityStats, [
+        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1 }
+      ]);
       assert.match(docsStaticData, /window\.HOTEL_STATIC_MODE = true;/);
       assert.match(publicStaticData, /window\.HOTEL_STATIC_MODE = false;/);
       await access(join(root, 'docs', 'inventory', 'guangdong', 'shenzhen.csv'));

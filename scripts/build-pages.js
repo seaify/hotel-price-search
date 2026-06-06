@@ -33,6 +33,8 @@ async function preparePagesInventory(rootDir, options) {
   const hasInventoryShards = await hasInventoryShardFiles(inventoryDir);
   const requireFullCoverage = options.requireFullInventoryCoverage
     ?? isTruthy(process.env.HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE);
+  const requireCityHotels = options.requireCityHotels
+    ?? (requireFullCoverage || isTruthy(process.env.HOTEL_PAGES_REQUIRE_CITY_HOTELS));
   const auditInventory = options.auditInventory
     ?? isTruthy(process.env.HOTEL_PAGES_AUDIT_INVENTORY);
   const manifestPath = options.manifestPath || `${publicDir}/hotel-inventory.manifest.json`;
@@ -50,7 +52,7 @@ async function preparePagesInventory(rootDir, options) {
   }
 
   if (hasInventoryShards || requireFullCoverage || auditInventory) {
-    coverage = await auditInventoryCoverage({ rootDir, manifestPath });
+    coverage = await auditInventoryCoverage({ rootDir, manifestPath, requireCityHotels });
     if (requireFullCoverage && !coverage.passed) {
       throw new Error(formatCoverageFailure(coverage));
     }
@@ -102,9 +104,14 @@ function formatCoverageFailure(coverage) {
     .join(', ');
   const unscoped = coverage.unscopedSources.map((source) => source.name).join(', ');
   const unknown = coverage.unknownDestinations.join(', ');
+  const withoutHotelStats = coverage.citiesWithoutHotelStats
+    .slice(0, 8)
+    .map((item) => `${item.province}/${item.city}`)
+    .join(', ');
   return [
     `Inventory coverage audit failed: ${coverage.coveredCities}/${coverage.totalCities} cities covered.`,
     missing ? `Missing: ${missing}${coverage.missingCities.length > 8 ? ` ... +${coverage.missingCities.length - 8}` : ''}` : '',
+    withoutHotelStats ? `Without hotel stats: ${withoutHotelStats}${coverage.citiesWithoutHotelStats.length > 8 ? ` ... +${coverage.citiesWithoutHotelStats.length - 8}` : ''}` : '',
     unscoped ? `Unscoped sources: ${unscoped}` : '',
     unknown ? `Unknown destinations: ${unknown}` : ''
   ].filter(Boolean).join(' ');

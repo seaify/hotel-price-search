@@ -66,4 +66,32 @@ describe('inventory coverage audit', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('requires per-city hotel stats when strict inventory evidence is requested', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-city-stats-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [
+        {
+          name: '范围声明源',
+          url: 'inventory/all.csv',
+          provinces,
+          cityStats: [{ province: '北京', city: '北京', rowCount: 10, hotelCount: 6 }]
+        }
+      ]
+    }));
+
+    try {
+      const summary = await auditInventoryCoverage({ rootDir: root, requireCityHotels: true });
+      assert.equal(summary.coveredCities, cityCatalog.length);
+      assert.equal(summary.missingCities.length, 0);
+      assert.equal(summary.citiesWithHotelStats, 1);
+      assert.equal(summary.citiesWithoutHotelStats.length, cityCatalog.length - 1);
+      assert.ok(summary.citiesWithoutHotelStats.some((item) => item.city === '上海'));
+      assert.equal(summary.passed, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

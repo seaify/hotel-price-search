@@ -56,7 +56,8 @@ export async function buildInventoryManifest(options = {}) {
       ...(summary.cities.length ? { cities: summary.cities } : {}),
       ...(summary.cities.length ? {} : summary.provinces.length ? { provinces: summary.provinces } : {}),
       rowCount: summary.rowCount,
-      hotelCount: summary.hotelCount
+      hotelCount: summary.hotelCount,
+      cityStats: summary.cityStats
     });
   }
 
@@ -210,14 +211,27 @@ function summarizeInventoryRows(rows, filePath) {
   const provinces = new Set();
   const providers = new Set();
   const hotels = new Set();
+  const cityStats = new Map();
 
   rows.forEach((row, index) => {
     const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
+    const hotelKey = getHotelKey(row, location, index);
     if (location.city) cities.add(location.city);
     if (location.province) provinces.add(location.province);
+    if (location.city) {
+      const existing = cityStats.get(location.city) || {
+        province: location.province || findCityProvince(location.city),
+        city: location.city,
+        rowCount: 0,
+        hotels: new Set()
+      };
+      existing.rowCount += 1;
+      existing.hotels.add(hotelKey);
+      cityStats.set(location.city, existing);
+    }
     const providerName = pick(row, 'providerName');
     if (providerName) providers.add(String(providerName).trim());
-    hotels.add(getHotelKey(row, location, index));
+    hotels.add(hotelKey);
   });
 
   return {
@@ -225,8 +239,20 @@ function summarizeInventoryRows(rows, filePath) {
     rowCount: rows.length,
     hotelCount: hotels.size,
     cities: sortChinese([...cities]),
-    provinces: sortChinese([...provinces])
+    provinces: sortChinese([...provinces]),
+    cityStats: formatCityStats(cityStats)
   };
+}
+
+function formatCityStats(cityStats) {
+  return [...cityStats.values()]
+    .map((item) => ({
+      province: item.province,
+      city: item.city,
+      rowCount: item.rowCount,
+      hotelCount: item.hotels.size
+    }))
+    .sort((a, b) => a.province.localeCompare(b.province, 'zh-CN') || a.city.localeCompare(b.city, 'zh-CN'));
 }
 
 function getHotelKey(row, location, index) {
@@ -268,6 +294,10 @@ function findEmbeddedCity(value) {
 function findExactCity(value) {
   const normalized = normalizeDestinationInput(value);
   return cityCatalog.find((item) => item.city === normalized) || null;
+}
+
+function findCityProvince(city) {
+  return cityCatalog.find((item) => item.city === city)?.province || '';
 }
 
 function findProvince(value) {
