@@ -385,7 +385,7 @@ npm run build:pages
 
 然后重新运行 `npm run build:pages` 并推送，构建后的 `docs/hotel-inventory.manifest.json` 会随站点一起发布。全国库存建议按城市或省份分片，避免用户打开页面时一次下载完整全国价格库。
 
-仓库也内置了 `.github/workflows/publish-supplier-inventory.yml`，可以在 GitHub Actions 里手动触发或每天自动刷新供应商库存。如果供应商给的是允许公开访问或带签名的临时 URL，可以直接打开 Actions -> Publish supplier inventory -> Run workflow，在 `supplier_inventory_inputs` 里粘贴一个或多个导出 URL，或在 `supplier_source_manifest_url` 里粘贴多源清单 URL；同一表单还可以临时填写 `supplier_field_map_json`、入住日期、每城/全国最低库存门槛、价格新鲜度和分片基础 URL。手动填写的 `supplier_inventory_inputs` / `supplier_source_manifest_url` 会优先于仓库里用于定时刷新的 secret，便于临时发布某个供应商批次。需要私密鉴权头或长期定时刷新时，再在仓库 Settings -> Secrets and variables -> Actions 里配置：
+仓库也内置了 `.github/workflows/publish-supplier-inventory.yml`，可以在 GitHub Actions 里手动触发或每天自动刷新供应商库存。如果供应商给的是允许公开访问或带签名的临时 URL，可以直接打开 Actions -> Publish supplier inventory -> Run workflow，在 `supplier_inventory_inputs` 里粘贴一个或多个导出 URL，或在 `supplier_source_manifest_url` 里粘贴多源清单 URL；同一表单还可以临时填写 `supplier_field_map_json`、入住日期、每城/全国最低库存门槛、价格新鲜度和分片基础 URL。建议第一次先勾选 `dry_run`，workflow 只做全国覆盖、正价证据和价格新鲜度验收，不写入 `public/inventory/`、不构建提交 Pages；预检通过后再取消 `dry_run` 正式发布。手动填写的 `supplier_inventory_inputs` / `supplier_source_manifest_url` 会优先于仓库里用于定时刷新的 secret，便于临时发布某个供应商批次。需要私密鉴权头或长期定时刷新时，再在仓库 Settings -> Secrets and variables -> Actions 里配置：
 
 - Secret `HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON`：供应商导出 URL 或文件路径数组，例如 `["https://supplier.example.com/nationwide.jsonl.gz?signature=..."]`，也可以是 `.xlsx` 导出表，或包含多份 CSV/JSON/JSONL/NDJSON/XLSX 的 `.zip` 导出包 URL
 - Secret `HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON`：可选，受保护导出 URL 的请求头，例如 `{"Authorization":"Bearer token","X-Api-Key":"key"}`
@@ -402,6 +402,12 @@ workflow 会先运行测试，再执行 `npm run publish:supplier-inventory:env`
 
 ```bash
 npm run check:supplier-inventory-config
+```
+
+如果供应商输入已经配置到环境变量，也可以在本地或 CI 里跑同样的 dry-run 验证，不发布任何分片：
+
+```bash
+npm run verify:supplier-inventory:env
 ```
 
 如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：

@@ -1,8 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { cityCatalog } from '../server/hotel-data.js';
 import {
   buildPublishSupplierInventoryOptions,
   inspectPublishSupplierInventoryConfig
@@ -11,6 +12,7 @@ import {
   formatSupplierInventoryConfigText,
   writeGithubOutput
 } from '../scripts/check-supplier-inventory-config.js';
+import { verifySupplierInventoryFromEnv } from '../scripts/verify-supplier-inventory-from-env.js';
 
 describe('supplier inventory env publisher config', () => {
   it('loads JSON input lists without splitting signed URL punctuation', () => {
@@ -173,6 +175,43 @@ describe('supplier inventory env publisher config', () => {
       assert.match(output, /^input_source=workflow-dispatch$/m);
       assert.match(output, /^manifest_configured=false$/m);
       assert.match(output, /^manifest_source=none$/m);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('verifies nationwide supplier inventory from workflow environment variables without publishing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-env-verify-'));
+    const inventoryPath = join(root, 'supplier.csv');
+    const rows = [
+      'id,name,province,city,source,price,checkIn,checkOut,updatedAt',
+      ...cityCatalog.map(({ province, city }, index) => [
+        `env-${index + 1}`,
+        `${city}环境预检酒店`,
+        province,
+        city,
+        '环境预检供应商',
+        500 + index,
+        '2026-06-01',
+        '2026-12-31',
+        '2026-06-06T12:00:00Z'
+      ].join(','))
+    ];
+    await writeFile(inventoryPath, rows.join('\n'), 'utf8');
+
+    try {
+      const result = await verifySupplierInventoryFromEnv({
+        HOTEL_SUPPLIER_INVENTORY_INPUTS_OVERRIDE: 'supplier.csv',
+        HOTEL_SUPPLIER_CHECK_IN: '2026-06-06',
+        HOTEL_SUPPLIER_CHECK_OUT: '2026-06-07',
+        HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS: '24',
+        HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME: '2026-06-06T18:00:00Z'
+      }, root);
+
+      assert.equal(result.passed, true);
+      assert.equal(result.split.rowCount, cityCatalog.length);
+      assert.equal(result.coverage.coveredCities, cityCatalog.length);
+      assert.equal(result.coverage.pricedHotelCount, cityCatalog.length);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

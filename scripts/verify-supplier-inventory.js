@@ -8,7 +8,7 @@ import { isRemoteInventoryInput, normalizeInventoryInputReference, splitInventor
 const defaultManifestPath = 'public/hotel-inventory.manifest.json';
 
 export async function verifySupplierInventory(options = {}) {
-  const cwd = resolve(options.cwd || process.cwd());
+  const cwd = resolve(options.rootDir || options.cwd || process.cwd());
   const inputFiles = normalizeInputFiles(options.inputFiles || options.inputFile || [])
     .map((inputFile) => normalizeInventoryInputReference(inputFile, cwd));
   const fieldMap = normalizeFieldMapReference(options.fieldMap || options.fields || {}, cwd);
@@ -175,7 +175,7 @@ function parseArgs(argv) {
   return options;
 }
 
-function formatText(result) {
+export function formatSupplierInventoryVerificationText(result) {
   const coverage = result.coverage;
   const lines = [
     `Supplier inventory verification: ${result.passed ? 'PASSED' : 'FAILED'}`,
@@ -314,7 +314,7 @@ if (isCli) {
       printHelp();
     } else {
       const result = await verifySupplierInventory(options);
-      console.log(options.json ? JSON.stringify(result, null, 2) : formatText(result));
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatSupplierInventoryVerificationText(result));
       if (!result.passed) process.exitCode = 1;
     }
   } catch (error) {

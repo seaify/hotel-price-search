@@ -13,6 +13,7 @@
     "publish:supplier-inventory:env": "node scripts/publish-supplier-inventory-from-env.js",
     "split:inventory-shards": "node scripts/split-inventory-shards.js",
     "verify:supplier-inventory": "node scripts/verify-supplier-inventory.js",
+    "verify:supplier-inventory:env": "node scripts/verify-supplier-inventory-from-env.js",
     "start": "node server/index.js",
     "test": "node --test"
   },

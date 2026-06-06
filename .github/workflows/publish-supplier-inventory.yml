@@ -67,6 +67,11 @@ on:
         description: Optional absolute URL prefix for generated inventory manifest URLs
         required: false
         type: string
+      dry_run:
+        description: Verify supplier inventory without publishing shards or committing generated Pages files
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: '23 18 * * *'
 
@@ -127,16 +132,20 @@ jobs:
         if: steps.config.outputs.configured == 'true'
         run: npm test
 
+      - name: Verify supplier inventory dry-run
+        if: steps.config.outputs.configured == 'true' && github.event.inputs.dry_run == 'true'
+        run: npm run verify:supplier-inventory:env
+
       - name: Publish supplier inventory
-        if: steps.config.outputs.configured == 'true'
+        if: steps.config.outputs.configured == 'true' && github.event.inputs.dry_run != 'true'
         run: npm run publish:supplier-inventory:env
 
       - name: Check generated changes
-        if: steps.config.outputs.configured == 'true'
+        if: steps.config.outputs.configured == 'true' && github.event.inputs.dry_run != 'true'
         run: git diff --check
 
       - name: Commit published inventory
-        if: steps.config.outputs.configured == 'true'
+        if: steps.config.outputs.configured == 'true' && github.event.inputs.dry_run != 'true'
         run: |
           if [ -z "$(git status --short -- public docs)" ]; then
             echo "::notice title=Supplier inventory unchanged::No generated Pages changes to commit."
