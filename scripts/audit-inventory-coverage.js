@@ -15,6 +15,8 @@ export async function auditInventoryCoverage(options = {}) {
     getNonNegativeInteger(options.minHotelsPerCity, 0)
   );
   const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 0);
+  const query = normalizeAuditQuery(options);
+  const dateFiltered = Boolean(query);
   const coveredCitySet = new Set();
   const unknownDestinations = new Set();
   const unscopedSources = [];
@@ -23,9 +25,20 @@ export async function auditInventoryCoverage(options = {}) {
 
   sources.forEach((source, index) => {
     const coverage = getSourceCoverage(source);
-    coverage.cities.forEach((city) => coveredCitySet.add(city));
+    const sourceName = getSourceName(source, index);
+    const effectiveStats = coverage.cityStats.map((stat) => ({
+      ...stat,
+      ...getCityStatCountsForQuery(stat, query)
+    }));
+    if (dateFiltered) {
+      effectiveStats
+        .filter((stat) => stat.rowCount > 0 || stat.hotelCount > 0)
+        .forEach((stat) => coveredCitySet.add(stat.city));
+    } else {
+      coverage.cities.forEach((city) => coveredCitySet.add(city));
+    }
     coverage.unknownDestinations.forEach((destination) => unknownDestinations.add(destination));
-    coverage.cityStats.forEach((stat) => {
+    effectiveStats.forEach((stat) => {
       const existing = cityStatsByCity.get(stat.city) || {
         province: stat.province,
         city: stat.city,
@@ -35,7 +48,7 @@ export async function auditInventoryCoverage(options = {}) {
       };
       existing.rowCount += stat.rowCount;
       existing.hotelCount += stat.hotelCount;
-      existing.sources.add(getSourceName(source, index));
+      if (stat.rowCount > 0 || stat.hotelCount > 0) existing.sources.add(sourceName);
       cityStatsByCity.set(stat.city, existing);
     });
     if (!coverage.hasScope) {
@@ -44,15 +57,18 @@ export async function auditInventoryCoverage(options = {}) {
         url: source.url || source.href || ''
       });
     }
+    const effectiveCities = dateFiltered
+      ? effectiveStats.filter((stat) => stat.rowCount > 0 || stat.hotelCount > 0).map((stat) => stat.city)
+      : coverage.cities;
     sourceCoverage.push({
-      name: getSourceName(source, index),
+      name: sourceName,
       url: source.url || source.href || '',
-      cityCount: coverage.cities.length,
-      cities: coverage.cities,
+      cityCount: effectiveCities.length,
+      cities: effectiveCities.sort((a, b) => a.localeCompare(b, 'zh-CN')),
       provinces: coverage.provinces,
       cityStatsCount: coverage.cityStats.length,
-      rowCount: coverage.cityStats.reduce((sum, stat) => sum + stat.rowCount, 0),
-      hotelCount: coverage.cityStats.reduce((sum, stat) => sum + stat.hotelCount, 0),
+      rowCount: effectiveStats.reduce((sum, stat) => sum + stat.rowCount, 0),
+      hotelCount: effectiveStats.reduce((sum, stat) => sum + stat.hotelCount, 0),
       unknownDestinations: coverage.unknownDestinations,
       hasScope: coverage.hasScope
     });
@@ -88,13 +104,19 @@ export async function auditInventoryCoverage(options = {}) {
       .filter((item) => item.hotelCount < minHotelsPerCity || item.rowCount < minRowsPerCity)
     : [];
   const basePassed = missingCities.length === 0 && unscopedSources.length === 0 && unknownDestinations.size === 0;
+  const effectiveRowCount = dateFiltered
+    ? [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.rowCount || 0), 0)
+    : sumSourceNumber(sources, 'rowCount');
+  const effectiveHotelCount = dateFiltered
+    ? [...cityStatsByCity.values()].reduce((sum, item) => sum + Number(item.hotelCount || 0), 0)
+    : sumSourceNumber(sources, 'hotelCount');
   const summary = {
     manifestPath,
     sourceCount: sources.length,
     scopedSourceCount: sourceCoverage.filter((source) => source.hasScope).length,
     unscopedSourceCount: unscopedSources.length,
-    rowCount: sumSourceNumber(sources, 'rowCount'),
-    hotelCount: sumSourceNumber(sources, 'hotelCount'),
+    rowCount: effectiveRowCount,
+    hotelCount: effectiveHotelCount,
     coveredCities: coveredCities.length,
     totalCities: cityCatalog.length,
     coverageRatio: cityCatalog.length ? Number((coveredCities.length / cityCatalog.length).toFixed(4)) : 0,
@@ -110,6 +132,7 @@ export async function auditInventoryCoverage(options = {}) {
     unscopedSources,
     unknownDestinations: [...unknownDestinations].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     sourceCoverage: sourceCoverage.sort((a, b) => b.cityCount - a.cityCount || a.name.localeCompare(b.name, 'zh-CN')),
+    query,
     passed: basePassed && citiesWithoutHotelStats.length === 0 && citiesBelowMinimums.length === 0
   };
 
@@ -221,8 +244,53 @@ function normalizeCityStat(value) {
     province: findProvince(rawProvince) || city.province,
     city: city.city,
     rowCount: Number(value.rowCount ?? value.rows ?? value.rateCount ?? value.priceCount ?? 0),
-    hotelCount: Number(value.hotelCount ?? value.hotels ?? 0)
+    hotelCount: Number(value.hotelCount ?? value.hotels ?? 0),
+    dateStats: normalizeDateStats(value.dateStats || value.availabilityStats || value.stayStats || [])
   };
+}
+
+function normalizeDateStats(rawStats) {
+  const values = Array.isArray(rawStats)
+    ? rawStats
+    : Object.entries(rawStats || {}).map(([range, value]) => {
+      const [checkIn, checkOut] = range.split('|');
+      return value && typeof value === 'object'
+        ? { checkIn, checkOut, ...value }
+        : { checkIn, checkOut, hotelCount: value };
+    });
+
+  return values
+    .map((value) => {
+      if (!value || typeof value !== 'object') return null;
+      return {
+        checkIn: normalizeDate(value.checkIn || value.startDate || value.availableFrom || ''),
+        checkOut: normalizeDate(value.checkOut || value.endDate || value.availableTo || ''),
+        rowCount: Number(value.rowCount ?? value.rows ?? value.rateCount ?? value.priceCount ?? 0),
+        hotelCount: Number(value.hotelCount ?? value.hotels ?? 0)
+      };
+    })
+    .filter(Boolean);
+}
+
+function getCityStatCountsForQuery(stat, query) {
+  if (!query) return {
+    rowCount: stat.rowCount,
+    hotelCount: stat.hotelCount
+  };
+  const matchingDateStats = (stat.dateStats || []).filter((dateStat) => dateStatCoversStay(dateStat, query));
+  return {
+    rowCount: matchingDateStats.reduce((sum, dateStat) => sum + Number(dateStat.rowCount || 0), 0),
+    hotelCount: matchingDateStats.reduce((sum, dateStat) => sum + Number(dateStat.hotelCount || 0), 0)
+  };
+}
+
+function dateStatCoversStay(dateStat, query) {
+  if (!dateStat.checkIn && !dateStat.checkOut) return true;
+  if (dateStat.checkIn && dateStat.checkOut) {
+    return dateStat.checkIn <= query.checkIn && dateStat.checkOut >= query.checkOut;
+  }
+  if (dateStat.checkIn) return dateStat.checkIn === query.checkIn;
+  return dateStat.checkOut === query.checkOut;
 }
 
 function collectDestinationValues(values) {
@@ -259,6 +327,22 @@ function normalizeDestinationInput(value) {
     .replace(/[省市]$/, '');
 }
 
+function normalizeAuditQuery(options = {}) {
+  const checkIn = normalizeDate(options.checkIn);
+  const checkOut = normalizeDate(options.checkOut);
+  if (!checkIn || !checkOut) return null;
+  return { checkIn, checkOut };
+}
+
+function normalizeDate(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const match = text.match(/^(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/);
+  if (!match) return '';
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
 function getSourceName(source, index) {
   return String(source.name || source.provider || source.supplier || `供应商源${index + 1}`);
 }
@@ -291,10 +375,11 @@ function formatAuditText(summary) {
   const percent = (summary.coverageRatio * 100).toFixed(1);
   const lines = [
     `Inventory coverage: ${summary.coveredCities}/${summary.totalCities} cities (${percent}%)`,
+    summary.query ? `Stay dates: ${summary.query.checkIn} to ${summary.query.checkOut}` : '',
     `Province coverage: ${summary.coveredProvinces}/${summary.totalProvinces}`,
     `Sources: ${summary.scopedSourceCount}/${summary.sourceCount} scoped${summary.unscopedSourceCount ? `, ${summary.unscopedSourceCount} unscoped` : ''}`,
     `Rows: ${summary.rowCount || 0}, hotels: ${summary.hotelCount || 0}`
-  ];
+  ].filter(Boolean);
   if (summary.missingCities.length) {
     lines.push(`Missing cities: ${summary.missingCities.slice(0, 20).map((item) => `${item.province}/${item.city}`).join(', ')}${summary.missingCities.length > 20 ? ` ... +${summary.missingCities.length - 20}` : ''}`);
   }
@@ -319,6 +404,8 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--manifest') options.manifestPath = argv[++index];
     else if (arg === '--missing-csv') options.missingCsvPath = argv[++index];
+    else if (arg === '--check-in') options.checkIn = argv[++index];
+    else if (arg === '--check-out') options.checkOut = argv[++index];
     else if (arg === '--require-all-cities') options.requireAllCities = true;
     else if (arg === '--require-city-hotels') options.requireCityHotels = true;
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
@@ -336,6 +423,8 @@ function printHelp() {
 Options:
   --manifest <file>       Manifest file. Default: public/hotel-inventory.manifest.json
   --missing-csv <file>    Write missing city CSV report
+  --check-in YYYY-MM-DD   Audit inventory available for this check-in date
+  --check-out YYYY-MM-DD  Audit inventory available through this check-out date
   --require-all-cities    Exit non-zero unless all catalog cities are explicitly covered
   --require-city-hotels   Also require cityStats hotelCount > 0 for every catalog city
   --min-hotels-per-city N Require at least N cityStats hotels per city

@@ -39,6 +39,8 @@ async function preparePagesInventory(rootDir, options) {
     options.minRowsPerCity ?? process.env.HOTEL_PAGES_MIN_ROWS_PER_CITY,
     0
   );
+  const checkIn = options.checkIn ?? process.env.HOTEL_PAGES_COVERAGE_CHECK_IN ?? '';
+  const checkOut = options.checkOut ?? process.env.HOTEL_PAGES_COVERAGE_CHECK_OUT ?? '';
   const requireFullCoverage = options.requireFullInventoryCoverage
     ?? isTruthy(process.env.HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE);
   const requireCityHotels = options.requireCityHotels
@@ -66,7 +68,9 @@ async function preparePagesInventory(rootDir, options) {
       manifestPath,
       requireCityHotels,
       minHotelsPerCity,
-      minRowsPerCity
+      minRowsPerCity,
+      checkIn,
+      checkOut
     });
     if (shouldBlockOnAudit && !coverage.passed) {
       throw new Error(formatCoverageFailure(coverage));

@@ -413,9 +413,11 @@ npm run audit:inventory-coverage
 npm run audit:inventory-coverage -- --require-all-cities --missing-csv missing-cities.csv
 npm run audit:inventory-coverage -- --require-all-cities --require-city-hotels
 npm run audit:inventory-coverage -- --require-all-cities --min-hotels-per-city 20 --min-rows-per-city 40
+npm run audit:inventory-coverage -- --check-in 2026-06-06 --check-out 2026-06-07 --require-all-cities --min-hotels-per-city 20
 HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true npm run build:pages
 HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true HOTEL_PAGES_MIN_HOTELS_PER_CITY=20 npm run build:pages
+HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true HOTEL_PAGES_COVERAGE_CHECK_IN=2026-06-06 HOTEL_PAGES_COVERAGE_CHECK_OUT=2026-06-07 npm run build:pages
 ```
 
 `--require-all-cities` 和 `HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true` 会在任一城市缺库存分片、存在未知城市名或存在未标注 `cities` / `provinces` 的源时返回非零退出码，防止“全国都要有”的数据目标被漏掉。
-严格 Pages 发布模式还会要求 manifest 里每个城市都有 `cityStats.hotelCount > 0`。如果要避免“每城只有 1 家酒店”的假覆盖，可以继续设置 `--min-hotels-per-city` / `--min-rows-per-city`，或用 `HOTEL_PAGES_MIN_HOTELS_PER_CITY` / `HOTEL_PAGES_MIN_ROWS_PER_CITY` 作为发布门槛。使用 `public/inventory/` 分片自动生成清单时会自动写入这份证据；如果手写外部供应商 URL 清单，也需要补齐 `cityStats` 才能通过严格发布。
+严格 Pages 发布模式还会要求 manifest 里每个城市都有 `cityStats.hotelCount > 0`。如果要避免“每城只有 1 家酒店”的假覆盖，可以继续设置 `--min-hotels-per-city` / `--min-rows-per-city`，或用 `HOTEL_PAGES_MIN_HOTELS_PER_CITY` / `HOTEL_PAGES_MIN_ROWS_PER_CITY` 作为发布门槛。设置 `--check-in` / `--check-out` 或 `HOTEL_PAGES_COVERAGE_CHECK_IN` / `HOTEL_PAGES_COVERAGE_CHECK_OUT` 后，审计会按该入住日期读取 `cityStats.dateStats`，过期或非该日期可售的城市会被当成缺口。使用 `public/inventory/` 分片自动生成清单时会自动写入这份证据；如果手写外部供应商 URL 清单，也需要补齐 `cityStats` 和 `dateStats` 才能通过严格发布。

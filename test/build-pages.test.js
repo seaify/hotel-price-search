@@ -13,8 +13,8 @@ describe('GitHub Pages builder', () => {
     await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
     await writeFile(join(root, 'public', 'app.js'), 'console.log("app");\n');
     await writeFile(join(root, 'public', 'inventory', 'guangdong', 'shenzhen.csv'), [
-      'id,masterHotelId,name,province,city,address,source,price',
-      'sz-1,CN-SZ-1,深圳发布测试酒店,广东省,深圳市,深圳南山测试路 1 号,发布供应商,588'
+      'id,masterHotelId,name,province,city,address,source,price,checkIn,checkOut',
+      'sz-1,CN-SZ-1,深圳发布测试酒店,广东省,深圳市,深圳南山测试路 1 号,发布供应商,588,2026-06-01,2026-12-31'
     ].join('\n'));
 
     try {
@@ -31,7 +31,7 @@ describe('GitHub Pages builder', () => {
       assert.equal(manifest.sources[0].rowCount, 1);
       assert.equal(manifest.sources[0].hotelCount, 1);
       assert.deepEqual(manifest.sources[0].cityStats, [
-        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1 }
+        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1 }] }
       ]);
       assert.match(docsStaticData, /window\.HOTEL_STATIC_MODE = true;/);
       assert.match(publicStaticData, /window\.HOTEL_STATIC_MODE = false;/);
@@ -80,6 +80,42 @@ describe('GitHub Pages builder', () => {
       await assert.rejects(
         () => buildPages({ rootDir: root, minHotelsPerCity: 2 }),
         /Below minimums: .* hotels 1\/2/
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects manifests without per-city availability for the configured stay dates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-pages-date-evidence-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 6,
+      hotelCount: 3,
+      dateStats: [{
+        checkIn: city === '北京' ? '2026-01-01' : '2026-06-01',
+        checkOut: city === '北京' ? '2026-02-01' : '2026-12-31',
+        rowCount: 6,
+        hotelCount: 3
+      }]
+    }));
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '日期外部源', url: 'https://example.com/inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      await assert.rejects(
+        () => buildPages({
+          rootDir: root,
+          requireFullInventoryCoverage: true,
+          checkIn: '2026-06-06',
+          checkOut: '2026-06-07'
+        }),
+        /Missing: 北京\/北京/
       );
     } finally {
       await rm(root, { recursive: true, force: true });

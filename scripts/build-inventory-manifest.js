@@ -33,7 +33,10 @@ const fieldAliases = {
   province: ['province', '省份', '省', '地区省份'],
   city: ['city', 'destination', '目的地', '城市', '市'],
   address: ['address', '酒店地址', '地址', '详细地址'],
-  providerName: ['source', 'provider', 'supplier', '供应商', '渠道', '来源']
+  providerName: ['source', 'provider', 'supplier', '供应商', '渠道', '来源'],
+  checkIn: ['checkIn', 'startDate', '入住日期', '入住', '可售开始日期', '开始日期'],
+  checkOut: ['checkOut', 'endDate', '离店日期', '离店', '可售结束日期', '结束日期'],
+  available: ['available', 'isAvailable', '可售', '是否可售', '库存状态', '状态']
 };
 
 export async function buildInventoryManifest(options = {}) {
@@ -216,17 +219,31 @@ function summarizeInventoryRows(rows, filePath) {
   rows.forEach((row, index) => {
     const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
     const hotelKey = getHotelKey(row, location, index);
+    const available = pick(row, 'available') === undefined ? true : parseBoolean(pick(row, 'available'));
+    const checkIn = normalizeDate(pick(row, 'checkIn'));
+    const checkOut = normalizeDate(pick(row, 'checkOut'));
     if (location.city) cities.add(location.city);
     if (location.province) provinces.add(location.province);
-    if (location.city) {
+    if (location.city && available) {
       const existing = cityStats.get(location.city) || {
         province: location.province || findCityProvince(location.city),
         city: location.city,
         rowCount: 0,
-        hotels: new Set()
+        hotels: new Set(),
+        dateStats: new Map()
       };
       existing.rowCount += 1;
       existing.hotels.add(hotelKey);
+      const dateKey = `${checkIn || ''}|${checkOut || ''}`;
+      const dateStat = existing.dateStats.get(dateKey) || {
+        checkIn,
+        checkOut,
+        rowCount: 0,
+        hotels: new Set()
+      };
+      dateStat.rowCount += 1;
+      dateStat.hotels.add(hotelKey);
+      existing.dateStats.set(dateKey, dateStat);
       cityStats.set(location.city, existing);
     }
     const providerName = pick(row, 'providerName');
@@ -250,9 +267,22 @@ function formatCityStats(cityStats) {
       province: item.province,
       city: item.city,
       rowCount: item.rowCount,
-      hotelCount: item.hotels.size
+      hotelCount: item.hotels.size,
+      dateStats: formatDateStats(item.dateStats)
     }))
     .sort((a, b) => a.province.localeCompare(b.province, 'zh-CN') || a.city.localeCompare(b.city, 'zh-CN'));
+}
+
+function formatDateStats(dateStats) {
+  return [...dateStats.values()]
+    .map((item) => ({
+      ...(item.checkIn ? { checkIn: item.checkIn } : {}),
+      ...(item.checkOut ? { checkOut: item.checkOut } : {}),
+      rowCount: item.rowCount,
+      hotelCount: item.hotels.size
+    }))
+    .sort((a, b) => String(a.checkIn || '').localeCompare(String(b.checkIn || ''))
+      || String(a.checkOut || '').localeCompare(String(b.checkOut || '')));
 }
 
 function getHotelKey(row, location, index) {
@@ -268,6 +298,22 @@ function getHotelKey(row, location, index) {
 
 function normalizeIdentifier(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function normalizeDate(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const match = text.match(/^(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/);
+  if (!match) return '';
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function parseBoolean(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (['false', '0', 'no', 'n', '不可售', '无房', '售罄', '下架', 'closed', 'unavailable', 'soldout'].includes(normalized)) return false;
+  return true;
 }
 
 export function normalizeInventoryLocation(cityValue, provinceValue) {

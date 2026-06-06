@@ -12,13 +12,13 @@ describe('inventory manifest builder', () => {
     await mkdir(join(inventoryDir, 'south'), { recursive: true });
 
     await writeFile(join(inventoryDir, 'south', 'gd.csv'), [
-      'id,masterHotelId,name,province,city,address,source,price',
-      'sz-1,CN-GD-SZ-1,深圳湾测试酒店,广东省,深圳市,深圳南山测试路 1 号,南方供应商,588',
-      'gz-1,CN-GD-GZ-1,广州塔测试酒店,广东省,广州市,广州海珠测试路 2 号,南方供应商,688'
+      'id,masterHotelId,name,province,city,address,source,price,checkIn,checkOut,available',
+      'sz-1,CN-GD-SZ-1,深圳湾测试酒店,广东省,深圳市,深圳南山测试路 1 号,南方供应商,588,2026-06-01,2026-12-31,true',
+      'gz-1,CN-GD-GZ-1,广州塔测试酒店,广东省,广州市,广州海珠测试路 2 号,南方供应商,688,2026-06-01,2026-12-31,true'
     ].join('\n'));
     await writeFile(join(inventoryDir, 'beijing.jsonl'), [
-      JSON.stringify({ id: 'bj-1', name: '北京国贸测试酒店', province: '北京', city: '北京', source: '北京供应商', price: 788 }),
-      JSON.stringify({ id: 'bj-2', name: '北京朝阳测试酒店', province: '北京市', city: '北京市', source: '北京供应商', price: 888 })
+      JSON.stringify({ id: 'bj-1', name: '北京国贸测试酒店', province: '北京', city: '北京', source: '北京供应商', price: 788, checkIn: '2026-06-01', checkOut: '2026-12-31' }),
+      JSON.stringify({ id: 'bj-2', name: '北京朝阳测试酒店', province: '北京市', city: '北京市', source: '北京供应商', price: 888, checkIn: '2026-06-01', checkOut: '2026-12-31' })
     ].join('\n'));
 
     try {
@@ -33,8 +33,8 @@ describe('inventory manifest builder', () => {
       assert.equal(south.hotelCount, 2);
       assert.equal(south.provinces, undefined);
       assert.deepEqual(south.cityStats, [
-        { province: '广东', city: '广州', rowCount: 1, hotelCount: 1 },
-        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1 }
+        { province: '广东', city: '广州', rowCount: 1, hotelCount: 1, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1 }] },
+        { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1 }] }
       ]);
 
       const beijing = manifest.sources.find((source) => source.url === 'inventory/beijing.jsonl');
@@ -44,7 +44,7 @@ describe('inventory manifest builder', () => {
       assert.equal(beijing.rowCount, 2);
       assert.equal(beijing.hotelCount, 2);
       assert.deepEqual(beijing.cityStats, [
-        { province: '北京', city: '北京', rowCount: 2, hotelCount: 2 }
+        { province: '北京', city: '北京', rowCount: 2, hotelCount: 2, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 2, hotelCount: 2 }] }
       ]);
 
       const written = JSON.parse(await readFile(join(root, 'public', 'hotel-inventory.manifest.json'), 'utf8'));
