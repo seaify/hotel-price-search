@@ -513,6 +513,86 @@ describe('hotel search data', () => {
     }
   });
 
+  it('filters real inventory coverage by requested stay dates', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-date-coverage-'));
+    const filePath = join(dir, 'date-coverage.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(filePath, JSON.stringify([
+      {
+        id: 'date-coverage-bj-001',
+        name: '北京日期覆盖酒店',
+        province: '北京',
+        city: '北京',
+        price: 900,
+        source: '日期覆盖供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'date-coverage-gz-001',
+        name: '广州过期覆盖酒店',
+        province: '广东',
+        city: '广州',
+        price: 700,
+        source: '日期覆盖供应商',
+        checkIn: '2026-01-01',
+        checkOut: '2026-02-01',
+        available: true
+      }
+    ]));
+
+    process.env.HOTEL_DATA_FILE = filePath;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    clearInventoryCache();
+
+    const server = createHotelServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const coverageResponse = await fetch(`${baseUrl}/api/coverage?checkIn=2026-06-06&checkOut=2026-06-07`);
+      const coverage = await coverageResponse.json();
+      assert.equal(coverageResponse.status, 200);
+      assert.deepEqual(coverage.query, { checkIn: '2026-06-06', checkOut: '2026-06-07' });
+      assert.equal(coverage.coveredCities, 1);
+      assert.ok(coverage.cityCoverage.some((item) => item.province === '北京' && item.city === '北京' && item.covered));
+      assert.ok(coverage.cityCoverage.some((item) => item.province === '广东' && item.city === '广州' && !item.covered && item.hotelCount === 0));
+      assert.ok(coverage.missingCities.some((item) => item.province === '广东' && item.city === '广州'));
+      assert.equal(coverage.sourceCoverage[0].coveredCities, 1);
+
+      const csvResponse = await fetch(`${baseUrl}/api/coverage.csv?checkIn=2026-06-06&checkOut=2026-06-07`);
+      const csv = await csvResponse.text();
+      assert.equal(csvResponse.status, 200);
+      assert.match(csv, /北京,北京,yes,1,1,1,日期覆盖供应商/);
+      assert.match(csv, /广东,广州,no,0,0,0,/);
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      clearInventoryCache();
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refreshes cached local inventory when the supplier file changes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-refresh-'));
     const filePath = join(dir, 'prices.json');

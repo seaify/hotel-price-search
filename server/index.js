@@ -55,7 +55,7 @@ export function createHotelServer() {
       }
 
       if (url.pathname === '/api/coverage' || url.pathname === '/api/coverage.csv') {
-        const coverage = await getLocalInventoryCoverage();
+        const coverage = await getLocalInventoryCoverage(null, getCoverageParams(url.searchParams));
         if (url.pathname.endsWith('.csv') || url.searchParams.get('format') === 'csv') {
           return sendCoverageCsv(response, coverage);
         }
@@ -415,6 +415,12 @@ function clampNumber(value, min, max, fallback) {
 
 function toDateInput(date) {
   return date.toISOString().slice(0, 10);
+}
+
+function getCoverageParams(searchParams) {
+  const checkIn = searchParams.get('checkIn') || '';
+  const checkOut = searchParams.get('checkOut') || '';
+  return checkIn && checkOut ? { checkIn, checkOut } : {};
 }
 
 async function serveStatic(pathname, response) {

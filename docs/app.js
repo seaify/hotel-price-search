@@ -235,12 +235,12 @@ async function downloadCoverageReport() {
 
   try {
     if (!isStaticMode()) {
-      const response = await fetch('/api/coverage.csv');
+      const response = await fetch(`/api/coverage.csv?${new URLSearchParams(getCoverageQuery())}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const csv = await response.text();
       downloadTextFile('hotel-coverage.csv', csv, 'text/csv;charset=utf-8');
     } else {
-      const coverage = summarizeStaticInventoryCoverage();
+      const coverage = summarizeStaticInventoryCoverage(getCoverageQuery());
       downloadTextFile('hotel-coverage.csv', buildCoverageCsv(coverage), 'text/csv;charset=utf-8');
     }
     elements.importStatus.textContent = '已下载覆盖缺口表';
@@ -253,6 +253,13 @@ async function downloadCoverageReport() {
 
 function hasCoverageSource() {
   return isStaticMode() ? state.staticInventoryRows.length > 0 : true;
+}
+
+function getCoverageQuery() {
+  return {
+    checkIn: elements.checkInInput.value,
+    checkOut: elements.checkOutInput.value
+  };
 }
 
 async function runSearch(options = {}) {
@@ -534,10 +541,12 @@ function summarizeStaticCities() {
   };
 }
 
-function summarizeStaticInventoryCoverage() {
+function summarizeStaticInventoryCoverage(params = {}) {
+  const dateFiltered = Boolean(params.checkIn && params.checkOut);
   const normalized = state.staticInventoryRows
     .map((row, index) => normalizeStaticHotel(row, index, 1))
-    .filter((hotel) => hotel.available && hotel.city);
+    .filter((hotel) => hotel.available && hotel.city)
+    .filter((hotel) => !dateFiltered || isStaticAvailableForDates(hotel, params));
   const mergedHotels = mergeStaticRates(normalized);
   const coveredCitySet = new Set(normalized.map((hotel) => hotel.city));
   const cities = getStaticCities();
@@ -568,7 +577,8 @@ function summarizeStaticInventoryCoverage() {
     missingCities: cityCoverage
       .filter((item) => !item.covered)
       .map(({ province, city }) => ({ province, city })),
-    sourceCoverage: buildStaticSourceCoverage(normalized)
+    sourceCoverage: buildStaticSourceCoverage(normalized),
+    query: dateFiltered ? { checkIn: params.checkIn, checkOut: params.checkOut } : null
   };
 }
 

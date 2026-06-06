@@ -199,14 +199,14 @@ export async function searchLocalInventory(params) {
   };
 }
 
-export async function getLocalInventoryCoverage(status = null) {
+export async function getLocalInventoryCoverage(status = null, params = {}) {
   const inventoryStatus = status || await getLocalInventoryStatus();
   if (!inventoryStatus.readable) {
-    return buildInventoryCoverage([]);
+    return buildInventoryCoverage([], params);
   }
   const inventory = await loadInventorySources(inventoryStatus);
   return {
-    ...buildInventoryCoverage(inventory.rows),
+    ...buildInventoryCoverage(inventory.rows, params),
     sourceCount: inventory.sourceCount,
     sourceErrors: inventory.sourceErrors
   };
@@ -274,10 +274,12 @@ async function loadInventorySources(status) {
   };
 }
 
-function buildInventoryCoverage(rows) {
+function buildInventoryCoverage(rows, params = {}) {
+  const dateFiltered = hasCoverageDates(params);
   const normalized = rows
     .map((row, index) => normalizeHotel(row, index, 1))
-    .filter((hotel) => hotel.available && hotel.city);
+    .filter((hotel) => hotel.available && hotel.city)
+    .filter((hotel) => !dateFiltered || isAvailableForDates(hotel, params));
   const mergedHotels = mergeHotelRates(normalized);
   const citySet = new Set(normalized.map((hotel) => hotel.city));
   const provinceSet = new Set(normalized.map((hotel) => hotel.province).filter(Boolean));
@@ -323,8 +325,13 @@ function buildInventoryCoverage(rows) {
     cityCoverage,
     missingCities,
     sourceCoverage: buildSourceCoverage(normalized),
-    provinceCoverage
+    provinceCoverage,
+    query: dateFiltered ? { checkIn: params.checkIn, checkOut: params.checkOut } : null
   };
+}
+
+function hasCoverageDates(params) {
+  return Boolean(params?.checkIn && params?.checkOut);
 }
 
 function groupSourcesByCity(hotels) {
