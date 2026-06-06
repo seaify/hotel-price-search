@@ -39,7 +39,7 @@ export async function searchSupplierApiInventory(params) {
 
   const rows = loaded.flatMap((source) =>
     source.rows.map((row) => ({
-      ...row,
+      ...mapSupplierRow(row, source.fieldMap),
       source: row.source || row.provider || row.supplier || source.name,
       __inventoryFile: source.name
     }))
@@ -164,8 +164,46 @@ function getSupplierApiConfigSources() {
       name: String(item.name || item.provider || `实时供应商${index + 1}`),
       method: normalizeMethod(item.method || getSupplierApiMethod()),
       headers: normalizeHeaders(item.headers || {}),
-      timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs())
+      timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
+      fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {})
     }));
+}
+
+function mapSupplierRow(row, fieldMap = {}) {
+  if (!fieldMap || !Object.keys(fieldMap).length) return row;
+  const mapped = { ...row };
+  Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
+    const value = getMappedValue(row, sourcePath);
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      mapped[targetField] = value;
+    }
+  });
+  return mapped;
+}
+
+function getMappedValue(row, sourcePath) {
+  const paths = Array.isArray(sourcePath) ? sourcePath : [sourcePath];
+  for (const path of paths) {
+    const value = getPathValue(row, path);
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function getPathValue(value, path) {
+  if (!path) return undefined;
+  return String(path).split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined;
+    return current[key];
+  }, value);
+}
+
+function normalizeFieldMap(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([, sourcePath]) =>
+    typeof sourcePath === 'string' ||
+    (Array.isArray(sourcePath) && sourcePath.every((item) => typeof item === 'string'))
+  ));
 }
 
 function getSupplierApiName() {

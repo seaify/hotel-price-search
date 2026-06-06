@@ -1648,6 +1648,197 @@ describe('hotel search data', () => {
     }
   });
 
+  it('maps non-standard live supplier API fields before normalization', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-field-map-'));
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousApiUrl = process.env.HOTEL_SUPPLIER_API_URL;
+    const previousApiUrls = process.env.HOTEL_SUPPLIER_API_URLS;
+    const previousApiConfig = process.env.HOTEL_SUPPLIER_API_CONFIG;
+    const previousApiName = process.env.HOTEL_SUPPLIER_API_NAME;
+    const previousApiNames = process.env.HOTEL_SUPPLIER_API_NAMES;
+    const previousApiMethod = process.env.HOTEL_SUPPLIER_API_METHOD;
+    const previousApiHeaders = process.env.HOTEL_SUPPLIER_API_HEADERS;
+    const previousAmadeusId = process.env.AMADEUS_CLIENT_ID;
+    const previousAmadeusSecret = process.env.AMADEUS_CLIENT_SECRET;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_SUPPLIER_API_URL;
+    delete process.env.HOTEL_SUPPLIER_API_URLS;
+    delete process.env.HOTEL_SUPPLIER_API_NAME;
+    delete process.env.HOTEL_SUPPLIER_API_NAMES;
+    delete process.env.HOTEL_SUPPLIER_API_METHOD;
+    delete process.env.HOTEL_SUPPLIER_API_HEADERS;
+    delete process.env.AMADEUS_CLIENT_ID;
+    delete process.env.AMADEUS_CLIENT_SECRET;
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    const supplierServer = createHttpServer((request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        offers: [
+          {
+            offerId: 'mapped-live-001',
+            hotel: {
+              title: '厦门映射实时供应商酒店',
+              provinceName: '福建省',
+              cityName: '厦门市',
+              areaName: '思明',
+              location: '厦门市思明区环岛路 99 号',
+              stars: 5,
+              score: 4.8
+            },
+            rate: {
+              sale: 888,
+              list: 1088,
+              plan: '豪华海景房',
+              pay: '在线付',
+              cancel: '限时免费取消',
+              book: 'https://example.com/mapped-live-001'
+            },
+            stay: {
+              from: '2026-06-01',
+              to: '2026-12-31'
+            },
+            stock: 'available'
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '字段映射供应商',
+      url: `http://127.0.0.1:${address.port}/mapped`,
+      method: 'GET',
+      fieldMap: {
+        id: 'offerId',
+        name: 'hotel.title',
+        province: 'hotel.provinceName',
+        city: 'hotel.cityName',
+        district: 'hotel.areaName',
+        address: 'hotel.location',
+        star: 'hotel.stars',
+        rating: 'hotel.score',
+        price: 'rate.sale',
+        originalPrice: 'rate.list',
+        roomName: 'rate.plan',
+        payment: 'rate.pay',
+        cancellation: 'rate.cancel',
+        bookingUrl: 'rate.book',
+        checkIn: 'stay.from',
+        checkOut: 'stay.to',
+        available: 'stock'
+      }
+    });
+
+    try {
+      const result = await searchHotels({
+        city: '厦门',
+        keyword: '映射实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '厦门映射实时供应商酒店');
+      assert.equal(result.hotels[0].province, '福建');
+      assert.equal(result.hotels[0].city, '厦门');
+      assert.equal(result.hotels[0].district, '思明');
+      assert.equal(result.hotels[0].star, 5);
+      assert.equal(result.hotels[0].rating, 4.8);
+      assert.equal(result.hotels[0].price, 888);
+      assert.equal(result.hotels[0].originalPrice, 1088);
+      assert.equal(result.hotels[0].style, '豪华海景房');
+      assert.equal(result.hotels[0].payment, '在线付');
+      assert.equal(result.hotels[0].cancellation, '限时免费取消');
+      assert.equal(result.hotels[0].bookingUrl, 'https://example.com/mapped-live-001');
+      assert.equal(result.hotels[0].providerName, '字段映射供应商');
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousApiUrl === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_URL;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_URL = previousApiUrl;
+      }
+      if (previousApiUrls === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_URLS;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_URLS = previousApiUrls;
+      }
+      if (previousApiConfig === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_CONFIG;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_CONFIG = previousApiConfig;
+      }
+      if (previousApiName === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_NAME;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_NAME = previousApiName;
+      }
+      if (previousApiNames === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_NAMES;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_NAMES = previousApiNames;
+      }
+      if (previousApiMethod === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_METHOD;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_METHOD = previousApiMethod;
+      }
+      if (previousApiHeaders === undefined) {
+        delete process.env.HOTEL_SUPPLIER_API_HEADERS;
+      } else {
+        process.env.HOTEL_SUPPLIER_API_HEADERS = previousApiHeaders;
+      }
+      if (previousAmadeusId === undefined) {
+        delete process.env.AMADEUS_CLIENT_ID;
+      } else {
+        process.env.AMADEUS_CLIENT_ID = previousAmadeusId;
+      }
+      if (previousAmadeusSecret === undefined) {
+        delete process.env.AMADEUS_CLIENT_SECRET;
+      } else {
+        process.env.AMADEUS_CLIENT_SECRET = previousAmadeusSecret;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('loads a remote supplier CSV URL as searchable real inventory', async () => {
     const previousFile = process.env.HOTEL_DATA_FILE;
     const previousFiles = process.env.HOTEL_DATA_FILES;

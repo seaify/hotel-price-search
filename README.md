@@ -65,13 +65,13 @@ npm start
 
 ```bash
 export HOTEL_SUPPLIER_API_CONFIG='[
-  {"name":"ctrip","url":"https://example.com/ctrip-live","method":"GET","headers":{"Authorization":"Bearer ctrip_token"}},
+  {"name":"ctrip","url":"https://example.com/ctrip-live","method":"GET","headers":{"Authorization":"Bearer ctrip_token"},"fieldMap":{"id":"offerId","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":["rate.sale","price"],"checkIn":"stay.from","checkOut":"stay.to","bookingUrl":"rate.book"}},
   {"name":"meituan","url":"https://example.com/meituan-live","method":"POST","headers":{"X-Api-Key":"meituan_key"}}
 ]'
 npm start
 ```
 
-`GET` 会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 会传 JSON body。响应字段格式和本地供应商文件相同，支持嵌套 JSON、CSV、JSONL/NDJSON。
+`GET` 会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 会传 JSON body。响应字段格式和本地供应商文件相同，支持嵌套 JSON、CSV、JSONL/NDJSON。若供应商字段不同，可用 `fieldMap` 把内部字段映射到供应商返回字段，支持点路径或候选路径数组，例如 `{"name":"hotel.title","price":["rate.sale","price"],"bookingUrl":"rate.book"}`。
 
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。JSONL 可参考 [hotel-prices.jsonl.sample](data/hotel-prices.jsonl.sample)。嵌套 JSON 可参考 [hotel-prices.nested.sample.json](data/hotel-prices.nested.sample.json)，支持 `hotels/items/data/results/records/list` 作为酒店集合，也支持酒店下的 `rooms/roomTypes/roomList` 和房型下的 `rates/offers/prices` 多报价结构。核心字段是：
 
