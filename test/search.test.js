@@ -2117,6 +2117,135 @@ describe('hotel search data', () => {
     }
   });
 
+  it('loads supplier destination maps from files and URLs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-external-destination-map-'));
+    const destinationMapFile = join(dir, 'supplier-destinations.json');
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = join(dir, 'imports');
+    clearInventoryCache();
+    await writeFile(destinationMapFile, JSON.stringify([
+      { province: '江苏', city: '南京', cityId: 'FILE-320100', cityCode: 'FILE-NKG' }
+    ]));
+
+    const requests = [];
+    const supplierServer = createHttpServer((request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      if (url.pathname === '/destination-map') {
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          destinations: [
+            { province: '江苏', city: '南京', cityId: 'URL-320100', cityCode: 'URL-NKG' }
+          ]
+        }));
+        return;
+      }
+
+      const cityId = url.searchParams.get('supplierCityId');
+      requests.push({ path: url.pathname, cityId });
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: `${url.pathname}-${cityId}`,
+            hotelName: url.pathname === '/file-prices' ? '南京文件外部映射酒店' : '南京远程外部映射酒店',
+            price: url.pathname === '/file-prices' ? 620 : 590,
+            source: url.pathname === '/file-prices' ? '文件编码供应商' : '远程编码供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify([
+      {
+        name: '文件编码供应商',
+        url: `http://127.0.0.1:${address.port}/file-prices`,
+        method: 'GET',
+        cityFanout: true,
+        cityFanoutLimit: 1,
+        destinationMapFile,
+        requestMap: {
+          supplierCityId: 'cityId',
+          checkInDate: 'checkIn',
+          checkOutDate: 'checkOut'
+        }
+      },
+      {
+        name: '远程编码供应商',
+        url: `http://127.0.0.1:${address.port}/url-prices`,
+        method: 'GET',
+        cityFanout: true,
+        cityFanoutLimit: 1,
+        destinationMapUrl: `http://127.0.0.1:${address.port}/destination-map`,
+        destinationMapCacheSeconds: 1,
+        requestMap: {
+          supplierCityId: 'supplierDestination.cityId',
+          checkInDate: 'checkIn',
+          checkOutDate: 'checkOut'
+        }
+      }
+    ]);
+
+    try {
+      const result = await searchHotels({
+        city: '江苏省',
+        keyword: '外部映射',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.total, 2);
+      assert.equal(result.coverageCities, 1);
+      assert.deepEqual(requests, [
+        { path: '/file-prices', cityId: 'FILE-320100' },
+        { path: '/url-prices', cityId: 'URL-320100' }
+      ]);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.city), ['南京', '南京']);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.province), ['江苏', '江苏']);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.name).sort(), [
+        '南京文件外部映射酒店',
+        '南京远程外部映射酒店'
+      ].sort());
+      assert.equal(result.providers.supplierApi.destinationMapConfigured, true);
+      assert.equal(result.providers.supplierApi.sourceCount, 2);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('supports per-source live supplier API config with mixed methods and headers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-config-'));
     const previousFile = process.env.HOTEL_DATA_FILE;

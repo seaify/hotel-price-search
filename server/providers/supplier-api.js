@@ -1,3 +1,5 @@
+import { readFile, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { cityCatalog, normalizeDestinationInput, resolveDestination } from '../hotel-data.js';
 import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
@@ -5,8 +7,11 @@ const defaultSupplierApiTimeoutMs = 10_000;
 const defaultSupplierCoverageProbeLimit = 1;
 const defaultSupplierCoverageProbeConcurrency = 4;
 const maxSupplierCoverageProbeConcurrency = 20;
+const defaultSupplierDestinationMapCacheSeconds = 300;
+const defaultSupplierDestinationMapMaxBytes = 4 * 1024 * 1024;
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const supplierAuthCache = new Map();
+const supplierDestinationMapCache = new Map();
 
 export function getSupplierApiStatus() {
   const sources = getSupplierApiSources();
@@ -24,7 +29,10 @@ export function getSupplierApiStatus() {
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
     authConfigured: sources.some((source) => Boolean(source.auth)),
     cityFanoutConfigured: sources.some((source) => source.cityFanout),
-    destinationMapConfigured: sources.some((source) => source.destinationMap?.configured),
+    destinationMapConfigured: sources.some((source) =>
+      source.destinationMap?.configured ||
+      Boolean(source.destinationMapFile || source.destinationMapUrl)
+    ),
     requestMapConfigured: sources.some((source) =>
       Object.keys(source.requestMap || {}).length > 0 ||
       Object.keys(source.requestDefaults || {}).length > 0
@@ -488,7 +496,7 @@ function firstBoolean(candidates, fields) {
 async function buildSupplierApiRequest(source, params) {
   const method = source.method || getSupplierApiMethod();
   const url = new URL(source.url);
-  const query = buildSupplierQuery(params, source);
+  const query = await buildSupplierQuery(params, source);
   const headers = {
     Accept: 'application/json, text/csv, application/x-ndjson',
     ...(source.headers || getSupplierApiHeaders())
@@ -604,9 +612,10 @@ function formatAuthHeaderValue(auth, token) {
   return auth.headerPrefix ? `${auth.headerPrefix} ${token}` : token;
 }
 
-function buildSupplierQuery(params, source = {}) {
+async function buildSupplierQuery(params, source = {}) {
   const pagination = buildSupplierPaginationQuery(params);
-  const destinationFields = buildSupplierDestinationQuery(params, source);
+  const destinationMap = await getSupplierDestinationMap(source);
+  const destinationFields = buildSupplierDestinationQuery(params, { ...source, destinationMap });
   const defaultQuery = {
     city: params.city || '',
     destinationType: params.destinationType || '',
@@ -735,6 +744,10 @@ function getSupplierApiConfigSources() {
           provinces: item.provinceMap || item.provinceCodes || item.provinceIds
         }
       ),
+      destinationMapFile: normalizeOptionalString(item.destinationMapFile || item.destinationMapPath || item.cityMapFile || item.cityCodeFile),
+      destinationMapUrl: normalizeOptionalString(item.destinationMapUrl || item.cityMapUrl || item.cityCodeUrl),
+      destinationMapHeaders: normalizeHeaders(item.destinationMapHeaders || item.destinationMapUrlHeaders || {}),
+      destinationMapCacheSeconds: getPositiveInteger(item.destinationMapCacheSeconds ?? item.mapCacheSeconds, defaultSupplierDestinationMapCacheSeconds),
       fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {}),
       requestMap: normalizeFieldMap(item.requestMap || item.queryMap || {}),
       requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {}),
@@ -811,6 +824,88 @@ function normalizeRequestDefaults(value) {
   return cloneRequestDefaults(value);
 }
 
+async function getSupplierDestinationMap(source = {}) {
+  const maps = [source.destinationMap];
+  if (source.destinationMapFile) {
+    maps.push(await readSupplierDestinationMapFile(source.destinationMapFile));
+  }
+  if (source.destinationMapUrl) {
+    maps.push(await readSupplierDestinationMapUrl(source.destinationMapUrl, source));
+  }
+  return mergeSupplierDestinationMaps(...maps);
+}
+
+async function readSupplierDestinationMapFile(filePath) {
+  const resolvedPath = resolve(filePath);
+  const info = await stat(resolvedPath);
+  const cacheKey = `destination-map-file:${resolvedPath}`;
+  const cached = supplierDestinationMapCache.get(cacheKey);
+  if (cached?.size === info.size && cached?.mtimeMs === info.mtimeMs) {
+    return cached.map;
+  }
+
+  if (info.size > defaultSupplierDestinationMapMaxBytes) {
+    throw new Error(`${resolvedPath} 目的地编码表超过 ${formatBytes(defaultSupplierDestinationMapMaxBytes)} 限制。`);
+  }
+  const text = await readFile(resolvedPath, 'utf8');
+  const map = parseSupplierDestinationMapText(text, resolvedPath);
+  supplierDestinationMapCache.set(cacheKey, {
+    type: 'file',
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    map,
+    cachedAt: Date.now()
+  });
+  return map;
+}
+
+async function readSupplierDestinationMapUrl(url, source = {}) {
+  const headers = source.destinationMapHeaders || {};
+  const cacheKey = `destination-map-url:${url}:${JSON.stringify(headers)}`;
+  const cached = supplierDestinationMapCache.get(cacheKey);
+  const cacheTtlMs = Number(source.destinationMapCacheSeconds || defaultSupplierDestinationMapCacheSeconds) * 1000;
+  if (cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    return cached.map;
+  }
+
+  const response = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(source.timeoutMs || getSupplierApiTimeoutMs())
+  });
+  if (!response.ok) {
+    throw new Error(`${redactUrl(url)} 目的地编码表返回 HTTP ${response.status}`);
+  }
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > defaultSupplierDestinationMapMaxBytes) {
+    throw new Error(`${redactUrl(url)} 目的地编码表超过 ${formatBytes(defaultSupplierDestinationMapMaxBytes)} 限制。`);
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text, 'utf8') > defaultSupplierDestinationMapMaxBytes) {
+    throw new Error(`${redactUrl(url)} 目的地编码表超过 ${formatBytes(defaultSupplierDestinationMapMaxBytes)} 限制。`);
+  }
+  const map = parseSupplierDestinationMapText(text, redactUrl(url));
+  supplierDestinationMapCache.set(cacheKey, {
+    type: 'url',
+    map,
+    cachedAt: Date.now()
+  });
+  return map;
+}
+
+function parseSupplierDestinationMapText(text, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`${label} 目的地编码表必须是 JSON。`);
+  }
+  const map = normalizeSupplierDestinationMap(parsed);
+  if (!map.configured) {
+    throw new Error(`${label} 目的地编码表没有识别到城市或省份编码。`);
+  }
+  return map;
+}
+
 function buildSupplierDestinationQuery(params, source = {}) {
   const destination = resolveDestination(params.city);
   const city = destination.type === 'city' ? destination.city : null;
@@ -858,8 +953,14 @@ function pickDestinationValue(value, fields) {
 }
 
 function normalizeSupplierDestinationMap(value) {
-  if (!value || Array.isArray(value) || typeof value !== 'object') {
-    return { configured: false, cities: new Map(), provinces: new Map(), any: new Map() };
+  if (!value || typeof value !== 'object') {
+    return createEmptySupplierDestinationMap();
+  }
+  if (Array.isArray(value)) {
+    return normalizeSupplierDestinationRows(value);
+  }
+  for (const key of ['destinations', 'items', 'data', 'records', 'list']) {
+    if (Array.isArray(value[key])) return normalizeSupplierDestinationRows(value[key]);
   }
   const nestedKeys = new Set([
     'cities',
@@ -873,11 +974,11 @@ function normalizeSupplierDestinationMap(value) {
   ]);
   const directEntries = Object.fromEntries(Object.entries(value).filter(([key]) => !nestedKeys.has(key)));
   const cities = mergeMaps(
-    normalizeSupplierDestinationEntries(value.cities || value.cityMap || value.cityCodes || value.cityIds),
+    normalizeSupplierDestinationEntryMap(value.cities || value.cityMap || value.cityCodes || value.cityIds, 'cities'),
     normalizeSupplierDestinationEntries(directEntries)
   );
   const provinces = mergeMaps(
-    normalizeSupplierDestinationEntries(value.provinces || value.provinceMap || value.provinceCodes || value.provinceIds),
+    normalizeSupplierDestinationEntryMap(value.provinces || value.provinceMap || value.provinceCodes || value.provinceIds, 'provinces'),
     normalizeSupplierDestinationEntries(directEntries)
   );
   const any = normalizeSupplierDestinationEntries(directEntries);
@@ -889,6 +990,33 @@ function normalizeSupplierDestinationMap(value) {
   };
 }
 
+function normalizeSupplierDestinationRows(rows) {
+  const cities = new Map();
+  const provinces = new Map();
+  rows
+    .filter((row) => row && !Array.isArray(row) && typeof row === 'object')
+    .forEach((row) => {
+      const cityName = getFirstDestinationField(row, ['city', 'cityName', 'destinationCity', '城市', '市', 'name', 'destinationName', '目的地']);
+      const provinceName = getFirstDestinationField(row, ['province', 'provinceName', '省份', '省']);
+      const normalizedDestination = normalizeSupplierDestinationValue(row);
+      if (cityName) addSupplierDestinationEntry(cities, cityName, normalizedDestination);
+      if (provinceName && (!cityName || hasProvinceDestinationFields(row))) {
+        addSupplierDestinationEntry(provinces, provinceName, normalizedDestination);
+      }
+    });
+  return {
+    configured: Boolean(cities.size || provinces.size),
+    cities,
+    provinces,
+    any: new Map()
+  };
+}
+
+function normalizeSupplierDestinationEntryMap(value, type) {
+  if (Array.isArray(value)) return normalizeSupplierDestinationRows(value)[type] || new Map();
+  return normalizeSupplierDestinationEntries(value);
+}
+
 function normalizeSupplierDestinationEntries(value) {
   const entries = new Map();
   if (!value || Array.isArray(value) || typeof value !== 'object') return entries;
@@ -897,10 +1025,37 @@ function normalizeSupplierDestinationEntries(value) {
     const normalizedKey = normalizeDestinationInput(trimmedKey);
     const normalizedDestination = normalizeSupplierDestinationValue(destination);
     if (!normalizedKey || !Object.keys(normalizedDestination).length) return;
-    entries.set(trimmedKey, normalizedDestination);
-    entries.set(normalizedKey, normalizedDestination);
+    addSupplierDestinationEntry(entries, trimmedKey, normalizedDestination);
   });
   return entries;
+}
+
+function addSupplierDestinationEntry(entries, key, value) {
+  const trimmedKey = String(key || '').trim();
+  const normalizedKey = normalizeDestinationInput(trimmedKey);
+  if (!normalizedKey || !Object.keys(value).length) return;
+  entries.set(trimmedKey, value);
+  entries.set(normalizedKey, value);
+}
+
+function getFirstDestinationField(row, fields) {
+  for (const field of fields) {
+    const value = row[field];
+    if (hasMappedValue(value)) return String(value).trim();
+  }
+  return '';
+}
+
+function hasProvinceDestinationFields(row) {
+  return [
+    'provinceId',
+    'provinceCode',
+    'province_id',
+    'province_code',
+    '省份ID',
+    '省份编码',
+    '省编码'
+  ].some((field) => hasMappedValue(row[field]));
 }
 
 function normalizeSupplierDestinationValue(value) {
@@ -912,6 +1067,23 @@ function normalizeSupplierDestinationValue(value) {
     return cloneRequestDefaults(value);
   }
   return {};
+}
+
+function createEmptySupplierDestinationMap() {
+  return { configured: false, cities: new Map(), provinces: new Map(), any: new Map() };
+}
+
+function mergeSupplierDestinationMaps(...destinationMaps) {
+  const maps = destinationMaps.filter(Boolean);
+  const cities = mergeMaps(...maps.map((map) => map.cities || new Map()));
+  const provinces = mergeMaps(...maps.map((map) => map.provinces || new Map()));
+  const any = mergeMaps(...maps.map((map) => map.any || new Map()));
+  return {
+    configured: Boolean(cities.size || provinces.size || any.size),
+    cities,
+    provinces,
+    any
+  };
 }
 
 function mergeMaps(...maps) {
@@ -1024,6 +1196,14 @@ function redactUrl(value) {
   } catch {
     return String(value || '');
   }
+}
+
+function normalizeOptionalString(value) {
+  return value === undefined || value === null ? '' : String(value).trim();
+}
+
+function formatBytes(bytes) {
+  return `${Math.round(bytes / 1024 / 1024)}MB`;
 }
 
 function unique(values) {

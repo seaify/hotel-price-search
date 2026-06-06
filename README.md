@@ -141,6 +141,29 @@ npm start
 }
 ```
 
+全国城市编码表较大时，也可以放到本地 JSON 文件或远程 JSON URL：
+
+```json
+{
+  "destinationMapFile": "/absolute/path/supplier-destinations.json",
+  "destinationMapUrl": "https://example.com/supplier-destinations.json",
+  "destinationMapHeaders": { "Authorization": "Bearer map_token" },
+  "requestMap": {
+    "cityId": "supplierDestination.cityId",
+    "cityCode": "supplierDestination.cityCode"
+  }
+}
+```
+
+编码表支持对象格式，也支持数组格式。数组适合从供应商城市表直接导出：
+
+```json
+[
+  { "province": "江苏", "city": "南京", "cityId": "320100", "cityCode": "NKG" },
+  { "province": "江苏", "city": "无锡", "cityId": "320200", "cityCode": "WUX" }
+]
+```
+
 如果供应商只支持城市级查价，不支持全国或省级目的地，可以启用 `cityFanout`。查询全国或省份时系统会按城市拆成多次请求，再合并酒店结果；`cityFanoutConcurrency` 控制并发数，`cityFanoutLimit` 可限制一次扇出的城市数量。
 
 供应商如果需要先换 access token，可以在单个源里配置 `auth`。`clientIdEnv` / `clientSecretEnv` 会从服务器环境变量读取密钥，token 会按 `expires_in` 缓存，并自动注入 `Authorization: Bearer ...`：
