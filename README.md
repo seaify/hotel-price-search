@@ -113,13 +113,33 @@ npm start
 
 ```bash
 export HOTEL_SUPPLIER_API_CONFIG='[
-  {"name":"ctrip","url":"https://example.com/ctrip-live","method":"GET","headers":{"Authorization":"Bearer ctrip_token"},"cityFanout":true,"cityFanoutConcurrency":4,"requestMap":{"cityName":"city","arrivalDate":"checkIn","departureDate":"checkOut","pageNo":"page","pageSize":"pageSize"},"requestDefaults":{"locale":"zh-CN","currency":"CNY"},"responsePath":"data.hotelList","paginationPath":"data.paging","fieldMap":{"id":"offerId","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":["rate.sale","price"],"checkIn":"stay.from","checkOut":"stay.to","bookingUrl":"rate.book"}},
+  {"name":"ctrip","url":"https://example.com/ctrip-live","method":"GET","headers":{"Authorization":"Bearer ctrip_token"},"cityFanout":true,"cityFanoutConcurrency":4,"destinationMap":{"cities":{"南京":{"cityId":"320100","cityCode":"NKG"},"无锡":{"cityId":"320200","cityCode":"WUX"}}},"requestMap":{"cityId":"supplierDestination.cityId","cityName":"cityName","arrivalDate":"checkIn","departureDate":"checkOut","pageNo":"page","pageSize":"pageSize"},"requestDefaults":{"locale":"zh-CN","currency":"CNY"},"responsePath":"data.hotelList","paginationPath":"data.paging","fieldMap":{"id":"offerId","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":["rate.sale","price"],"checkIn":"stay.from","checkOut":"stay.to","bookingUrl":"rate.book"}},
   {"name":"meituan","url":"https://example.com/meituan-live","method":"POST","headers":{"X-Api-Key":"meituan_key"},"requestMap":{"destination.cityName":"city","stay.arrival":"checkIn","stay.departure":"checkOut","occupancy.adultCount":"adults","pagination.pageNo":"page","pagination.pageSize":"pageSize"}}
 ]'
 npm start
 ```
 
-`GET` 默认会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 默认会传同样的 JSON body。若供应商请求字段不同，可用 `requestMap` 改名：左边是供应商需要的请求字段，右边是本站内部查询字段。除原始 `limit` / `offset` 外，还可映射派生字段 `page` 和 `pageSize`，其中 `page = floor(offset / limit) + 1`。GET 会把嵌套路径展平成查询参数，例如 `stay.arrival=2026-06-06`；POST 会生成嵌套 JSON。`requestDefaults` 可放固定请求参数，例如 `locale`、`currency`、`channel`。
+`GET` 默认会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 默认会传同样的 JSON body。若供应商请求字段不同，可用 `requestMap` 改名：左边是供应商需要的请求字段，右边是本站内部查询字段。除原始 `limit` / `offset` 外，还可映射派生字段 `page` 和 `pageSize`，其中 `page = floor(offset / limit) + 1`。也可映射 `cityName`、`cityCode`、`cityId`、`provinceName`、`provinceCode`、`destinationId`、`supplierDestination.*` 等目的地字段。GET 会把嵌套路径展平成查询参数，例如 `stay.arrival=2026-06-06`；POST 会生成嵌套 JSON。`requestDefaults` 可放固定请求参数，例如 `locale`、`currency`、`channel`。
+
+如果供应商需要自己的城市 ID 或目的地编码，可在单个源里配置 `destinationMap`，再在 `requestMap` 里引用 `supplierDestination.cityId`、`supplierDestination.cityCode` 或自定义字段：
+
+```json
+{
+  "destinationMap": {
+    "cities": {
+      "南京": { "cityId": "320100", "cityCode": "NKG" },
+      "无锡": { "cityId": "320200", "cityCode": "WUX" }
+    },
+    "provinces": {
+      "江苏": { "provinceId": "320000" }
+    }
+  },
+  "requestMap": {
+    "cityId": "supplierDestination.cityId",
+    "provinceId": "supplierDestination.provinceId"
+  }
+}
+```
 
 如果供应商只支持城市级查价，不支持全国或省级目的地，可以启用 `cityFanout`。查询全国或省份时系统会按城市拆成多次请求，再合并酒店结果；`cityFanoutConcurrency` 控制并发数，`cityFanoutLimit` 可限制一次扇出的城市数量。
 
@@ -237,6 +257,7 @@ npm start
 - 多供应商文件合并，同酒店保留多报价并优先显示最低价
 - 网页上传供应商 CSV/JSON/JSONL，无需重启服务即可查询导入价格
 - Node 版和 GitHub Pages 静态版都支持远程供应商清单 manifest、多源自动重载和每源字段映射
+- 实时供应商 API 支持每源请求字段映射、目的地编码映射、城市级扇出、分页元数据和覆盖探测
 - `/api/status` 查看当前供应商接入状态
 - `/api/coverage` 查看真实库存全国覆盖率，包含逐城市覆盖、按供应商分组覆盖和缺口城市；可传 `checkIn` / `checkOut` 计算指定入住日期的可售覆盖；`/api/coverage?format=csv` 或 `/api/coverage.csv` 可下载逐城市覆盖/缺口清单，CSV 会标出覆盖该城市的供应商来源
 - `/api/supplier-coverage` 对已配置的实时供应商 API 做按城市可售探测；可传 `city`、`checkIn` / `checkOut`、`probeLimit`、`concurrency`、`cityLimit`，`/api/supplier-coverage.csv` 可下载实时供应商覆盖缺口表

@@ -1,4 +1,4 @@
-import { cityCatalog, resolveDestination } from '../hotel-data.js';
+import { cityCatalog, normalizeDestinationInput, resolveDestination } from '../hotel-data.js';
 import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
 const defaultSupplierApiTimeoutMs = 10_000;
@@ -24,6 +24,7 @@ export function getSupplierApiStatus() {
     headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
     authConfigured: sources.some((source) => Boolean(source.auth)),
     cityFanoutConfigured: sources.some((source) => source.cityFanout),
+    destinationMapConfigured: sources.some((source) => source.destinationMap?.configured),
     requestMapConfigured: sources.some((source) =>
       Object.keys(source.requestMap || {}).length > 0 ||
       Object.keys(source.requestDefaults || {}).length > 0
@@ -155,11 +156,17 @@ async function readSupplierApiSourceLoads(source, params) {
   if (!cities.length) return readSupplierApiSource(source, params);
 
   const loads = await settleLimited(
-    cities.map((city) => () => readSupplierApiSource(source, {
-      ...params,
-      city: city.city,
-      destinationType: 'city'
-    })),
+    cities.map((city) => async () => {
+      const loaded = await readSupplierApiSource(source, {
+        ...params,
+        city: city.city,
+        destinationType: 'city'
+      });
+      return {
+        ...loaded,
+        rows: loaded.rows.map((row) => ({ ...row, __supplierFallbackCity: city }))
+      };
+    }),
     source.cityFanoutConcurrency
   );
   const loaded = loads
@@ -599,6 +606,7 @@ function formatAuthHeaderValue(auth, token) {
 
 function buildSupplierQuery(params, source = {}) {
   const pagination = buildSupplierPaginationQuery(params);
+  const destinationFields = buildSupplierDestinationQuery(params, source);
   const defaultQuery = {
     city: params.city || '',
     destinationType: params.destinationType || '',
@@ -616,6 +624,7 @@ function buildSupplierQuery(params, source = {}) {
   };
   const baseQuery = {
     ...defaultQuery,
+    ...destinationFields,
     page: pagination.page,
     pageSize: pagination.pageSize
   };
@@ -720,6 +729,12 @@ function getSupplierApiConfigSources() {
       cityFanout: parseBoolean(item.cityFanout ?? item.fanoutCities ?? item.destinationFanout, false),
       cityFanoutLimit: getPositiveInteger(item.cityFanoutLimit ?? item.fanoutLimit, 0),
       cityFanoutConcurrency: getPositiveInteger(item.cityFanoutConcurrency ?? item.fanoutConcurrency, 4),
+      destinationMap: normalizeSupplierDestinationMap(
+        item.destinationMap || item.destinations || {
+          cities: item.cityMap || item.cityCodes || item.cityIds,
+          provinces: item.provinceMap || item.provinceCodes || item.provinceIds
+        }
+      ),
       fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {}),
       requestMap: normalizeFieldMap(item.requestMap || item.queryMap || {}),
       requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {}),
@@ -743,10 +758,11 @@ function mapSupplierRow(row, fieldMap = {}) {
 function mapSupplierRows(source, rows, fallbackCity = null) {
   return rows.map((row) => {
     const mapped = mapSupplierRow(row, source.fieldMap);
+    const rowFallbackCity = mapped.__supplierFallbackCity || fallbackCity;
     return {
       ...mapped,
-      province: mapped.province || fallbackCity?.province,
-      city: mapped.city || fallbackCity?.city,
+      province: mapped.province || rowFallbackCity?.province,
+      city: mapped.city || rowFallbackCity?.city,
       source: mapped.source || mapped.provider || mapped.supplier || mapped.providerName || source.name,
       __inventoryFile: source.name
     };
@@ -793,6 +809,117 @@ function normalizePathList(value) {
 function normalizeRequestDefaults(value) {
   if (!value || Array.isArray(value) || typeof value !== 'object') return {};
   return cloneRequestDefaults(value);
+}
+
+function buildSupplierDestinationQuery(params, source = {}) {
+  const destination = resolveDestination(params.city);
+  const city = destination.type === 'city' ? destination.city : null;
+  const provinceName = city?.province || destination.province || (destination.type === 'province' ? destination.label : '');
+  const supplierCity = city ? getSupplierDestinationValue(source.destinationMap, 'cities', city.city) : {};
+  const supplierProvince = provinceName ? getSupplierDestinationValue(source.destinationMap, 'provinces', provinceName) : {};
+  const supplierDestination = {
+    ...supplierProvince,
+    ...supplierCity
+  };
+  const cityCode = pickDestinationValue(supplierCity, ['cityCode', 'code', 'id']) || city?.code || '';
+  const cityId = pickDestinationValue(supplierCity, ['cityId', 'id', 'code']) || '';
+  const provinceCode = pickDestinationValue(supplierProvince, ['provinceCode', 'code', 'id']) || '';
+  const provinceId = pickDestinationValue(supplierProvince, ['provinceId', 'id', 'code']) || '';
+
+  return {
+    cityName: city?.city || (destination.type === 'city' ? params.city || '' : ''),
+    cityCode,
+    cityId,
+    province: provinceName,
+    provinceName,
+    provinceCode,
+    provinceId,
+    destinationLabel: destination.label,
+    destinationCode: pickDestinationValue(supplierDestination, ['destinationCode', 'cityCode', 'provinceCode', 'code', 'id']) || cityCode || provinceCode,
+    destinationId: pickDestinationValue(supplierDestination, ['destinationId', 'cityId', 'provinceId', 'id', 'code']) || cityId || provinceId,
+    supplierDestination,
+    supplierCity,
+    supplierProvince
+  };
+}
+
+function getSupplierDestinationValue(destinationMap, type, key) {
+  if (!destinationMap?.configured || !key) return {};
+  const typed = destinationMap[type]?.get(String(key).trim()) || destinationMap[type]?.get(normalizeDestinationInput(key));
+  const shared = destinationMap.any?.get(String(key).trim()) || destinationMap.any?.get(normalizeDestinationInput(key));
+  return typed || shared || {};
+}
+
+function pickDestinationValue(value, fields) {
+  for (const field of fields) {
+    if (hasMappedValue(value?.[field])) return value[field];
+  }
+  return '';
+}
+
+function normalizeSupplierDestinationMap(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') {
+    return { configured: false, cities: new Map(), provinces: new Map(), any: new Map() };
+  }
+  const nestedKeys = new Set([
+    'cities',
+    'cityMap',
+    'cityCodes',
+    'cityIds',
+    'provinces',
+    'provinceMap',
+    'provinceCodes',
+    'provinceIds'
+  ]);
+  const directEntries = Object.fromEntries(Object.entries(value).filter(([key]) => !nestedKeys.has(key)));
+  const cities = mergeMaps(
+    normalizeSupplierDestinationEntries(value.cities || value.cityMap || value.cityCodes || value.cityIds),
+    normalizeSupplierDestinationEntries(directEntries)
+  );
+  const provinces = mergeMaps(
+    normalizeSupplierDestinationEntries(value.provinces || value.provinceMap || value.provinceCodes || value.provinceIds),
+    normalizeSupplierDestinationEntries(directEntries)
+  );
+  const any = normalizeSupplierDestinationEntries(directEntries);
+  return {
+    configured: Boolean(cities.size || provinces.size || any.size),
+    cities,
+    provinces,
+    any
+  };
+}
+
+function normalizeSupplierDestinationEntries(value) {
+  const entries = new Map();
+  if (!value || Array.isArray(value) || typeof value !== 'object') return entries;
+  Object.entries(value).forEach(([key, destination]) => {
+    const trimmedKey = String(key || '').trim();
+    const normalizedKey = normalizeDestinationInput(trimmedKey);
+    const normalizedDestination = normalizeSupplierDestinationValue(destination);
+    if (!normalizedKey || !Object.keys(normalizedDestination).length) return;
+    entries.set(trimmedKey, normalizedDestination);
+    entries.set(normalizedKey, normalizedDestination);
+  });
+  return entries;
+}
+
+function normalizeSupplierDestinationValue(value) {
+  if (value === undefined || value === null || value === '') return {};
+  if (typeof value === 'string' || typeof value === 'number') {
+    return { code: String(value), id: String(value) };
+  }
+  if (!Array.isArray(value) && typeof value === 'object') {
+    return cloneRequestDefaults(value);
+  }
+  return {};
+}
+
+function mergeMaps(...maps) {
+  const merged = new Map();
+  maps.forEach((map) => {
+    map.forEach((value, key) => merged.set(key, value));
+  });
+  return merged;
 }
 
 function normalizeSupplierAuth(value) {

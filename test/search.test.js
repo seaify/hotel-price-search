@@ -2011,6 +2011,112 @@ describe('hotel search data', () => {
     }
   });
 
+  it('maps supplier destination codes for live API requests', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-destination-map-'));
+    const envKeys = [
+      'HOTEL_DATA_FILE',
+      'HOTEL_DATA_FILES',
+      'HOTEL_IMPORT_DIR',
+      'HOTEL_DATA_URL',
+      'HOTEL_DATA_URLS',
+      'HOTEL_DATA_MANIFEST_URL',
+      'HOTEL_DATA_MANIFEST_URLS',
+      'HOTEL_DATA_MANIFEST_CONFIG',
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+    process.env.HOTEL_IMPORT_DIR = dir;
+    clearInventoryCache();
+
+    const requestedCityIds = [];
+    const requestedCityCodes = [];
+    const supplierServer = createHttpServer((request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const cityId = url.searchParams.get('supplierCityId');
+      requestedCityIds.push(cityId);
+      requestedCityCodes.push(url.searchParams.get('supplierCityCode'));
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: [
+          {
+            id: `mapped-destination-${cityId}`,
+            hotelName: `${cityId}编码实时酒店`,
+            price: cityId === '320100' ? 610 : 480,
+            source: '编码供应商',
+            checkIn: '2026-06-01',
+            checkOut: '2026-12-31',
+            available: true
+          }
+        ]
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '编码供应商',
+      url: `http://127.0.0.1:${address.port}/mapped-prices`,
+      method: 'GET',
+      cityFanout: true,
+      cityFanoutLimit: 2,
+      cityFanoutConcurrency: 1,
+      destinationMap: {
+        cities: {
+          南京: { cityId: '320100', cityCode: 'NKG-SUP' },
+          无锡: { cityId: '320200', cityCode: 'WUX-SUP' }
+        }
+      },
+      requestMap: {
+        supplierCityId: 'supplierDestination.cityId',
+        supplierCityCode: 'cityCode',
+        checkInDate: 'checkIn',
+        checkOutDate: 'checkOut'
+      }
+    });
+
+    try {
+      const result = await searchHotels({
+        city: '江苏省',
+        keyword: '编码实时',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'supplier-api');
+      assert.equal(result.total, 2);
+      assert.equal(result.coverageCities, 2);
+      assert.deepEqual(requestedCityIds, ['320100', '320200']);
+      assert.deepEqual(requestedCityCodes, ['NKG-SUP', 'WUX-SUP']);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.city).sort(), ['南京', '无锡']);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.province).sort(), ['江苏', '江苏']);
+      assert.deepEqual(result.hotels.map((hotel) => hotel.name).sort(), [
+        '320100编码实时酒店',
+        '320200编码实时酒店'
+      ].sort());
+      assert.equal(result.providers.supplierApi.destinationMapConfigured, true);
+      assert.equal(result.providers.supplierApi.cityFanoutConfigured, true);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('supports per-source live supplier API config with mixed methods and headers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-live-api-config-'));
     const previousFile = process.env.HOTEL_DATA_FILE;
