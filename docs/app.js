@@ -946,7 +946,9 @@ function renderProviderStatus(providers) {
   const supplierApiReady = Boolean(providers?.supplierApi?.configured);
   const supplierApiCount = Number(providers?.supplierApi?.apiCount || 0);
   const apiReady = Boolean(providers?.amadeus?.configured);
-  const coverage = providers?.localInventory?.coverage;
+  const manifestCoverage = remoteHealth.manifestCoverage;
+  const coverage = providers?.localInventory?.coverage || manifestCoverage;
+  const coverageLabel = providers?.localInventory?.coverage ? '真实覆盖城市' : manifestCoverage ? '清单覆盖城市' : '真实覆盖城市';
   const sourceErrors = [
     ...(providers?.localInventory?.sourceErrors || []),
     ...(providers?.supplierApi?.sourceErrors || [])
@@ -958,7 +960,7 @@ function renderProviderStatus(providers) {
   const remoteHealthState = remoteFailedCount || remoteStaleCount ? 'warn' : remoteHealthyCount ? 'on' : remoteCount ? 'warn' : '';
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
-    ['真实覆盖城市', coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
+    [coverageLabel, coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
     ['远程供应商文件', remoteHealthLabel, remoteHealthState],
     ['实时供应商 API', supplierApiReady ? `${supplierApiCount || 1} 源` : '未配置', supplierApiReady ? 'on' : ''],
     ['Amadeus API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
@@ -1035,13 +1037,13 @@ async function syncProviderPanels(providers) {
 async function refreshCoverageDashboard(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
   if (!localReady) {
-    renderCoverageDashboard(null);
+    renderCoverageDashboard(providers?.localInventory?.remoteInventory?.manifestCoverage || null);
     return;
   }
 
   try {
     const coverage = isStaticMode()
-      ? summarizeStaticInventoryCoverage(getCoverageQuery())
+      ? getBestStaticCoverageForDashboard(getCoverageQuery(), providers)
       : await fetchJson(`/api/coverage?${new URLSearchParams(getCoverageQuery())}`);
     renderCoverageDashboard(coverage);
   } catch {
@@ -1065,11 +1067,14 @@ function renderCoverageDashboard(coverage) {
   const dateLabel = coverage.query?.checkIn && coverage.query?.checkOut
     ? `${coverage.query.checkIn} 至 ${coverage.query.checkOut}`
     : '全部日期';
+  const heading = coverage.mode === 'manifest' ? '供应商清单覆盖' : '真实库存覆盖';
+  const hotelLabel = coverage.mode === 'manifest' ? '清单酒店' : '真实酒店';
+  const rowLabel = coverage.mode === 'manifest' ? '清单报价行' : '报价行';
 
   elements.coverageDashboard.hidden = false;
   elements.coverageDashboard.innerHTML = `
     <div class="coverage-dashboard-heading">
-      <strong>真实库存覆盖</strong>
+      <strong>${escapeHtml(heading)}</strong>
       <span>${escapeHtml(dateLabel)}</span>
     </div>
     <div class="coverage-meter" aria-label="真实库存城市覆盖率">
@@ -1082,11 +1087,11 @@ function renderCoverageDashboard(coverage) {
       </div>
       <div>
         <b>${escapeHtml(formatNumber(coverage.hotelCount || 0))}</b>
-        <span>真实酒店</span>
+        <span>${escapeHtml(hotelLabel)}</span>
       </div>
       <div>
         <b>${escapeHtml(formatNumber(coverage.rowCount || 0))}</b>
-        <span>报价行</span>
+        <span>${escapeHtml(rowLabel)}</span>
       </div>
     </div>
     ${sourceCoverage.length ? `
@@ -1140,6 +1145,15 @@ function summarizeStaticCities() {
   };
 }
 
+function getBestStaticCoverageForDashboard(query, providers) {
+  const inventoryCoverage = summarizeStaticInventoryCoverage(query);
+  const manifestCoverage = providers?.localInventory?.remoteInventory?.manifestCoverage;
+  if (manifestCoverage && Number(manifestCoverage.coveredCities || 0) > Number(inventoryCoverage.coveredCities || 0)) {
+    return manifestCoverage;
+  }
+  return inventoryCoverage;
+}
+
 function summarizeStaticInventoryCoverage(params = {}) {
   const dateFiltered = Boolean(params.checkIn && params.checkOut);
   const normalized = state.staticInventoryRows
@@ -1178,6 +1192,75 @@ function summarizeStaticInventoryCoverage(params = {}) {
       .map(({ province, city }) => ({ province, city })),
     sourceCoverage: buildStaticSourceCoverage(normalized),
     query: dateFiltered ? { checkIn: params.checkIn, checkOut: params.checkOut } : null
+  };
+}
+
+function summarizeRemoteInventoryManifestCoverage() {
+  const sources = state.defaultRemoteInventoryManifest?.sources || [];
+  if (!sources.length) return null;
+
+  const cities = getStaticCities();
+  const cityByName = new Map(cities.map((item) => [item.city, item]));
+  const coveredCitySet = new Set();
+  const sourceNamesByCity = new Map();
+  const sourceCoverage = [];
+
+  sources.forEach((source) => {
+    const citySet = new Set();
+    (source.cities || []).forEach((city) => {
+      if (cityByName.has(city)) citySet.add(city);
+    });
+    (source.provinces || []).forEach((province) => {
+      cities
+        .filter((city) => city.province === province)
+        .forEach((city) => citySet.add(city.city));
+    });
+    citySet.forEach((city) => {
+      coveredCitySet.add(city);
+      sourceNamesByCity.set(city, [...new Set([...(sourceNamesByCity.get(city) || []), source.name || '供应商'])]);
+    });
+    sourceCoverage.push({
+      sourceName: source.name || '供应商',
+      rowCount: Number(source.rowCount || 0),
+      hotelCount: Number(source.hotelCount || 0),
+      coveredCities: citySet.size,
+      totalCities: cities.length,
+      coverageRatio: cities.length ? Number((citySet.size / cities.length).toFixed(4)) : 0,
+      coveredProvinces: new Set([...citySet].map((city) => cityByName.get(city)?.province).filter(Boolean)).size,
+      totalProvinces: new Set(cities.map((city) => city.province)).size
+    });
+  });
+
+  const coveredCities = cities.filter((city) => coveredCitySet.has(city.city));
+  const provinceSet = new Set(cities.map((city) => city.province));
+  const rowCount = sources.reduce((sum, source) => sum + Number(source.rowCount || 0), 0);
+  const hotelCount = sources.reduce((sum, source) => sum + Number(source.hotelCount || 0), 0);
+  const cityCoverage = cities.map(({ province, city }) => ({
+    province,
+    city,
+    covered: coveredCitySet.has(city),
+    rowCount: 0,
+    hotelCount: 0,
+    sourceCount: sourceNamesByCity.get(city)?.length || 0,
+    sources: sourceNamesByCity.get(city) || []
+  }));
+
+  return {
+    mode: 'manifest',
+    rowCount,
+    hotelCount,
+    coveredCities: coveredCities.length,
+    totalCities: cities.length,
+    coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
+    coveredProvinces: new Set(coveredCities.map((city) => city.province)).size,
+    totalProvinces: provinceSet.size,
+    cityCoverage,
+    missingCities: cityCoverage
+      .filter((item) => !item.covered)
+      .map(({ province, city }) => ({ province, city })),
+    sourceCoverage: sourceCoverage
+      .sort((a, b) => b.coveredCities - a.coveredCities || b.hotelCount - a.hotelCount || a.sourceName.localeCompare(b.sourceName, 'zh-CN')),
+    query: null
   };
 }
 
@@ -1232,6 +1315,7 @@ function getStaticProviderStatus() {
   const remoteLoads = state.remoteInventoryLoads.map((load) => ({ ...load }));
   const remoteSourceLoads = remoteLoads.filter((load) => load.type !== 'manifest');
   const failedRemoteLoads = remoteSourceLoads.filter((load) => load.status === 'failed');
+  const manifestCoverage = summarizeRemoteInventoryManifestCoverage();
   const manifestSourceCount = remoteLoads
     .filter((load) => load.type === 'manifest')
     .reduce((total, load) => total + Number(load.sourceCount || 0), 0);
@@ -1254,7 +1338,8 @@ function getStaticProviderStatus() {
         staleCount: remoteSourceLoads.filter((load) => load.status === 'stale').length,
         failedCount: failedRemoteLoads.length,
         loadingCount: remoteSourceLoads.filter((load) => load.status === 'loading').length,
-        loads: remoteLoads
+        loads: remoteLoads,
+        manifestCoverage
       },
       importedCount: state.staticImportNames.length,
       importedFiles: state.staticImportNames.map((filename) => ({ filename })),
@@ -1341,7 +1426,9 @@ function normalizeRemoteInventoryManifestSource(source, index, manifestUrl) {
     fieldMap: normalizeStaticFieldMap(source.fieldMap || source.fields || {}),
     preload: source.preload === true || source.eager === true,
     cities: scopedDestinations.cities,
-    provinces: scopedDestinations.provinces
+    provinces: scopedDestinations.provinces,
+    rowCount: Number(source.rowCount || source.rows || 0),
+    hotelCount: Number(source.hotelCount || source.hotels || 0)
   };
 }
 
