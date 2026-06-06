@@ -1845,6 +1845,7 @@ describe('hotel search data', () => {
     const previousImportDir = process.env.HOTEL_IMPORT_DIR;
     const previousDataUrl = process.env.HOTEL_DATA_URL;
     const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
     const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
     const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
 
@@ -1852,6 +1853,7 @@ describe('hotel search data', () => {
     delete process.env.HOTEL_DATA_FILES;
     delete process.env.HOTEL_IMPORT_DIR;
     delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
     delete process.env.HOTEL_DATA_URL_HEADERS;
     process.env.HOTEL_DATA_CACHE_SECONDS = '3600';
     clearInventoryCache();
@@ -1925,6 +1927,11 @@ describe('hotel search data', () => {
       } else {
         process.env.HOTEL_DATA_URLS = previousDataUrls;
       }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
+      }
       if (previousDataUrlHeaders === undefined) {
         delete process.env.HOTEL_DATA_URL_HEADERS;
       } else {
@@ -1946,6 +1953,7 @@ describe('hotel search data', () => {
     const previousDataUrls = process.env.HOTEL_DATA_URLS;
     const previousManifestUrl = process.env.HOTEL_DATA_MANIFEST_URL;
     const previousManifestUrls = process.env.HOTEL_DATA_MANIFEST_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
     const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
     const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
 
@@ -1955,6 +1963,7 @@ describe('hotel search data', () => {
     delete process.env.HOTEL_DATA_URL;
     delete process.env.HOTEL_DATA_URLS;
     delete process.env.HOTEL_DATA_MANIFEST_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
     delete process.env.HOTEL_DATA_URL_HEADERS;
     process.env.HOTEL_DATA_CACHE_SECONDS = '3600';
     clearInventoryCache();
@@ -2129,6 +2138,164 @@ describe('hotel search data', () => {
       } else {
         process.env.HOTEL_DATA_MANIFEST_URLS = previousManifestUrls;
       }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
+      }
+      if (previousDataUrlHeaders === undefined) {
+        delete process.env.HOTEL_DATA_URL_HEADERS;
+      } else {
+        process.env.HOTEL_DATA_URL_HEADERS = previousDataUrlHeaders;
+      }
+      if (previousCacheSeconds === undefined) {
+        delete process.env.HOTEL_DATA_CACHE_SECONDS;
+      } else {
+        process.env.HOTEL_DATA_CACHE_SECONDS = previousCacheSeconds;
+      }
+    }
+  });
+
+  it('loads inline remote supplier config from the environment', async () => {
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    const previousDataUrl = process.env.HOTEL_DATA_URL;
+    const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestUrl = process.env.HOTEL_DATA_MANIFEST_URL;
+    const previousManifestUrls = process.env.HOTEL_DATA_MANIFEST_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
+    const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
+    const previousCacheSeconds = process.env.HOTEL_DATA_CACHE_SECONDS;
+
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_URL;
+    delete process.env.HOTEL_DATA_MANIFEST_URLS;
+    delete process.env.HOTEL_DATA_URL_HEADERS;
+    process.env.HOTEL_DATA_CACHE_SECONDS = '3600';
+    clearInventoryCache();
+
+    const mappedJson = JSON.stringify({
+      offers: [
+        {
+          offerId: 'inline-mapped-001',
+          hotel: {
+            title: '厦门内联配置映射酒店',
+            provinceName: '福建省',
+            cityName: '厦门市',
+            areaName: '思明',
+            location: '厦门市思明区内联路 1 号'
+          },
+          rate: {
+            sale: 788,
+            book: 'https://example.com/inline-mapped-001'
+          },
+          stay: {
+            from: '2026-06-01',
+            to: '2026-12-31'
+          },
+          stock: 'available'
+        }
+      ]
+    });
+
+    const supplierServer = createHttpServer((request, response) => {
+      assert.equal(request.url, '/inline-mapped.json');
+      assert.equal(request.headers.authorization, 'Bearer inline-token');
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(mappedJson);
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const address = supplierServer.address();
+    process.env.HOTEL_DATA_MANIFEST_CONFIG = JSON.stringify({
+      sources: [
+        {
+          name: '内联配置供应商',
+          url: `http://127.0.0.1:${address.port}/inline-mapped.json`,
+          headers: {
+            Authorization: 'Bearer inline-token'
+          },
+          fieldMap: {
+            id: 'offerId',
+            name: 'hotel.title',
+            province: 'hotel.provinceName',
+            city: 'hotel.cityName',
+            district: 'hotel.areaName',
+            address: 'hotel.location',
+            price: 'rate.sale',
+            bookingUrl: 'rate.book',
+            checkIn: 'stay.from',
+            checkOut: 'stay.to',
+            available: 'stock'
+          }
+        }
+      ]
+    });
+
+    try {
+      const result = await searchHotels({
+        city: '厦门',
+        keyword: '内联配置',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '厦门内联配置映射酒店');
+      assert.equal(result.hotels[0].price, 788);
+      assert.equal(result.hotels[0].providerName, '内联配置供应商');
+      assert.equal(result.providers.localInventory.remoteCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.configSourceCount, 1);
+      assert.equal(result.providers.localInventory.remoteInventory.manifestUrlCount, 0);
+      assert.match(result.notice, /1 个已接入的供应商库存源/);
+    } finally {
+      clearInventoryCache();
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      if (previousDataUrl === undefined) {
+        delete process.env.HOTEL_DATA_URL;
+      } else {
+        process.env.HOTEL_DATA_URL = previousDataUrl;
+      }
+      if (previousDataUrls === undefined) {
+        delete process.env.HOTEL_DATA_URLS;
+      } else {
+        process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousManifestUrl === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URL;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URL = previousManifestUrl;
+      }
+      if (previousManifestUrls === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_URLS;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_URLS = previousManifestUrls;
+      }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
+      }
       if (previousDataUrlHeaders === undefined) {
         delete process.env.HOTEL_DATA_URL_HEADERS;
       } else {
@@ -2148,12 +2315,14 @@ describe('hotel search data', () => {
     const previousImportDir = process.env.HOTEL_IMPORT_DIR;
     const previousDataUrl = process.env.HOTEL_DATA_URL;
     const previousDataUrls = process.env.HOTEL_DATA_URLS;
+    const previousManifestConfig = process.env.HOTEL_DATA_MANIFEST_CONFIG;
     const previousDataUrlHeaders = process.env.HOTEL_DATA_URL_HEADERS;
 
     delete process.env.HOTEL_DATA_FILE;
     delete process.env.HOTEL_DATA_FILES;
     delete process.env.HOTEL_IMPORT_DIR;
     delete process.env.HOTEL_DATA_URLS;
+    delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
     delete process.env.HOTEL_DATA_URL_HEADERS;
     clearInventoryCache();
 
@@ -2206,6 +2375,11 @@ describe('hotel search data', () => {
         delete process.env.HOTEL_DATA_URLS;
       } else {
         process.env.HOTEL_DATA_URLS = previousDataUrls;
+      }
+      if (previousManifestConfig === undefined) {
+        delete process.env.HOTEL_DATA_MANIFEST_CONFIG;
+      } else {
+        process.env.HOTEL_DATA_MANIFEST_CONFIG = previousManifestConfig;
       }
       if (previousDataUrlHeaders === undefined) {
         delete process.env.HOTEL_DATA_URL_HEADERS;

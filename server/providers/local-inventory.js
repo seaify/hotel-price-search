@@ -90,6 +90,11 @@ export function getRemoteInventoryManifestUrls() {
     .filter(Boolean);
 }
 
+export function getRemoteInventoryConfigSources() {
+  if (!process.env.HOTEL_DATA_MANIFEST_CONFIG) return [];
+  return parseRemoteInventoryConfigSources(process.env.HOTEL_DATA_MANIFEST_CONFIG);
+}
+
 export function clearInventoryCache() {
   inventoryCache.clear();
 }
@@ -98,6 +103,7 @@ export async function getLocalInventoryStatus() {
   const importedFiles = await listImportedInventoryFiles();
   const remoteUrls = getRemoteInventoryUrls();
   const remoteManifestUrls = getRemoteInventoryManifestUrls();
+  const remoteConfigSources = getRemoteInventoryConfigSources();
   const filePaths = unique([...getLocalInventoryPaths(), ...importedFiles.map((file) => file.filePath)]);
   const files = await Promise.all(filePaths.map(async (filePath) => {
     try {
@@ -116,17 +122,18 @@ export async function getLocalInventoryStatus() {
   const readableFiles = files.filter((file) => file.readable);
 
   return {
-    configured: Boolean(process.env.HOTEL_DATA_FILE || process.env.HOTEL_DATA_FILES || remoteUrls.length || remoteManifestUrls.length || importedFiles.length),
-    readable: readableFiles.length > 0 || remoteUrls.length > 0 || remoteManifestUrls.length > 0,
+    configured: Boolean(process.env.HOTEL_DATA_FILE || process.env.HOTEL_DATA_FILES || remoteUrls.length || remoteManifestUrls.length || remoteConfigSources.length || importedFiles.length),
+    readable: readableFiles.length > 0 || remoteUrls.length > 0 || remoteManifestUrls.length > 0 || remoteConfigSources.length > 0,
     filePath: filePaths[0],
     filePaths,
     fileCount: filePaths.length,
-    readableCount: readableFiles.length + remoteUrls.length + remoteManifestUrls.length,
-    remoteCount: remoteUrls.length + remoteManifestUrls.length,
+    readableCount: readableFiles.length + remoteUrls.length + remoteManifestUrls.length + remoteConfigSources.length,
+    remoteCount: remoteUrls.length + remoteManifestUrls.length + remoteConfigSources.length,
     remoteInventory: {
-      configured: remoteUrls.length > 0 || remoteManifestUrls.length > 0,
+      configured: remoteUrls.length > 0 || remoteManifestUrls.length > 0 || remoteConfigSources.length > 0,
       urlCount: remoteUrls.length,
       manifestUrlCount: remoteManifestUrls.length,
+      configSourceCount: remoteConfigSources.length,
       urls: remoteUrls.map(redactRemoteUrl),
       manifestUrls: remoteManifestUrls.map(redactRemoteUrl),
       timeoutMs: getRemoteTimeoutMs(),
@@ -268,7 +275,14 @@ async function loadInventorySources(status) {
   const loadedFiles = await Promise.all(readableFiles.map(readInventoryFile));
   const remoteLoads = await Promise.allSettled([
     ...getRemoteInventoryUrls().map((url) => readRemoteInventoryUrl(url)),
-    ...getRemoteInventoryManifestUrls().map((url) => readRemoteInventoryManifestUrl(url))
+    ...getRemoteInventoryManifestUrls().map((url) => readRemoteInventoryManifestUrl(url)),
+    ...getRemoteInventoryConfigSources().map((source) =>
+      readRemoteInventoryUrl(source.url, {
+        sourceName: source.name,
+        fieldMap: source.fieldMap,
+        headers: source.headers
+      })
+    )
   ]);
   const loadedRemote = remoteLoads
     .filter((result) => result.status === 'fulfilled')
@@ -681,12 +695,33 @@ function parseRemoteInventoryManifestSources(content, manifestUrl) {
         : [];
   return sources
     .filter((source) => source && typeof source === 'object' && (source.url || source.href))
-    .map((source, index) => ({
-      url: new URL(source.url || source.href, manifestUrl).href,
-      name: String(source.name || source.provider || source.supplier || `远程供应商${index + 1}`),
-      fieldMap: normalizeFieldMap(source.fieldMap || source.fields || {}),
-      headers: normalizeRemoteHeaders(source.headers || {})
-    }));
+    .map((source, index) => normalizeRemoteInventorySource(source, index, manifestUrl));
+}
+
+function parseRemoteInventoryConfigSources(content) {
+  const parsed = JSON.parse(content);
+  const sources = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.sources)
+      ? parsed.sources
+      : Array.isArray(parsed?.feeds)
+        ? parsed.feeds
+        : Array.isArray(parsed?.inventorySources)
+          ? parsed.inventorySources
+          : [parsed];
+  return sources
+    .filter((source) => source && typeof source === 'object' && (source.url || source.href))
+    .map((source, index) => normalizeRemoteInventorySource(source, index));
+}
+
+function normalizeRemoteInventorySource(source, index, baseUrl = null) {
+  const rawUrl = source.url || source.href;
+  return {
+    url: baseUrl ? new URL(rawUrl, baseUrl).href : new URL(rawUrl).href,
+    name: String(source.name || source.provider || source.supplier || `远程供应商${index + 1}`),
+    fieldMap: normalizeFieldMap(source.fieldMap || source.fields || {}),
+    headers: normalizeRemoteHeaders(source.headers || {})
+  };
 }
 
 function getRemoteInventoryHeaders() {

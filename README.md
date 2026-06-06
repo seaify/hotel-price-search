@@ -50,6 +50,13 @@ export HOTEL_DATA_MANIFEST_URL=https://example.com/hotel-suppliers.json
 npm start
 ```
 
+如果清单里需要放私密鉴权头，也可以不放远程文件，直接写进服务器环境变量：
+
+```bash
+export HOTEL_DATA_MANIFEST_CONFIG='{"sources":[{"name":"ctrip","url":"https://example.com/ctrip-prices.json","headers":{"Authorization":"Bearer ctrip_token"},"fieldMap":{"name":"hotel.title","city":"hotel.cityName","price":"rate.sale"}},{"name":"meituan","url":"https://example.com/meituan-prices.csv","headers":{"X-Api-Key":"meituan_key"}}]}'
+npm start
+```
+
 清单格式与网页远程导入相同：
 
 ```json
