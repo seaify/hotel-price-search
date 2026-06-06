@@ -190,14 +190,9 @@ export async function searchLocalInventory(params) {
   }
 
   const inventory = await loadInventorySources(status);
-  const nights = getNightCount(params.checkIn, params.checkOut);
-  const normalized = inventory.rows
-    .map((row, index) => normalizeHotel(row, index, nights))
-    .filter((hotel) => isAvailableForDates(hotel, params));
-  const merged = mergeHotelRates(filterByDestination(normalized, params));
 
   return {
-    hotels: applyFilters(merged, params),
+    hotels: searchInventoryRows(inventory.rows, params),
     status: { ...inventory.status, coverage: buildInventoryCoverage(inventory.rows) },
     rowCount: inventory.rows.length,
     sourceCount: inventory.sourceCount
@@ -222,6 +217,20 @@ export function parseInventory(raw, extension = '.json') {
   if (extension === '.jsonl' || extension === '.ndjson') return parseJsonLines(raw);
   const parsed = JSON.parse(raw);
   return flattenInventoryDocument(parsed);
+}
+
+export function searchInventoryRows(rows, params, options = {}) {
+  const sourceLabel = options.sourceLabel || '';
+  const source = options.source || 'local';
+  const nights = getNightCount(params.checkIn, params.checkOut);
+  const normalized = rows
+    .map((row, index) => normalizeHotel({
+      ...row,
+      __inventoryFile: row.__inventoryFile || sourceLabel
+    }, index, nights, { source, sourceLabel }))
+    .filter((hotel) => isAvailableForDates(hotel, params));
+  const merged = mergeHotelRates(filterByDestination(normalized, params), source);
+  return applyFilters(merged, params);
 }
 
 function sanitizeImportFilename(filename) {
@@ -616,15 +625,16 @@ function findExactInventoryCity(value) {
   return cityCatalog.find((item) => item.city === normalized) || null;
 }
 
-function normalizeHotel(row, index, nights) {
+function normalizeHotel(row, index, nights, options = {}) {
   const price = parseMoney(pick(row, 'price'));
   const totalPrice = parseMoney(pick(row, 'totalPrice')) || price * nights;
   const star = Number(pick(row, 'star') || 0) || null;
   const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
   const amenities = splitList(pick(row, 'amenities'));
   const tags = splitList(pick(row, 'tags'));
-  const providerName = pick(row, 'providerName') || basename(row.__inventoryFile || '本地供应商文件');
+  const providerName = pick(row, 'providerName') || options.sourceLabel || basename(row.__inventoryFile || '本地供应商文件');
   const roomName = pick(row, 'roomName') || '供应商库存';
+  const source = options.source || 'local';
 
   return {
     id: pick(row, 'id') || `local-${index}`,
@@ -648,7 +658,7 @@ function normalizeHotel(row, index, nights) {
     image: pick(row, 'image') || defaultImage,
     payment: pick(row, 'payment') || '预订前确认',
     cancellation: pick(row, 'cancellation') || '预订前确认',
-    source: 'local',
+    source,
     providerName,
     checkIn: normalizeDate(pick(row, 'checkIn')),
     checkOut: normalizeDate(pick(row, 'checkOut')),
@@ -693,7 +703,7 @@ function normalizeDate(value) {
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
 }
 
-function mergeHotelRates(hotels) {
+function mergeHotelRates(hotels, source = 'local') {
   const merged = new Map();
 
   hotels.forEach((hotel) => {
@@ -739,7 +749,7 @@ function mergeHotelRates(hotels) {
       providerNames,
       offerCount: rates.length,
       tags: unique([...(hotel.tags || []), rates.length > 1 ? `${rates.length} 个报价` : '真实库存']),
-      source: 'local'
+      source
     };
   });
 }

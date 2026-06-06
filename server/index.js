@@ -18,6 +18,10 @@ import {
   saveImportedInventoryFile,
   searchLocalInventory
 } from './providers/local-inventory.js';
+import {
+  getSupplierApiStatus,
+  searchSupplierApiInventory
+} from './providers/supplier-api.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const rootDir = normalize(join(__dirname, '..'));
@@ -98,9 +102,12 @@ export function createHotelServer() {
 export async function searchHotels(params) {
   const normalized = normalizeSearchParams(params);
   const providerEnabled = Boolean(process.env.AMADEUS_CLIENT_ID && process.env.AMADEUS_CLIENT_SECRET);
+  const supplierApiStatus = getSupplierApiStatus();
+  const liveProviderEnabled = providerEnabled || supplierApiStatus.configured;
   const localStatus = await getLocalInventoryStatus();
   let inventoryFallbackStatus = null;
   let inventoryFailureNotice = '';
+  let liveFailureNotice = '';
 
   if (localStatus.readable) {
     const localResults = await searchLocalInventory(normalized);
@@ -133,6 +140,36 @@ export async function searchHotels(params) {
     inventoryFailureNotice = errorNotice ? `${errorNotice} 当前已回退到备用数据源。` : '';
   }
 
+  if (supplierApiStatus.configured) {
+    try {
+      const apiResults = await searchSupplierApiInventory(normalized);
+      if (apiResults.hotels.length > 0) {
+        const page = paginateHotels(apiResults.hotels, normalized);
+        const providers = await getProviderStatus();
+        if (inventoryFallbackStatus) providers.localInventory = inventoryFallbackStatus;
+        providers.supplierApi = apiResults.status;
+        return {
+          source: 'supplier-api',
+          sourceLabel: `${apiResults.status.name} 实时价格`,
+          mode: 'supplier-api',
+          generatedAt: new Date().toISOString(),
+          query: normalized,
+          total: page.total,
+          returned: page.hotels.length,
+          coverageCities: page.coverageCities,
+          pagination: page.pagination,
+          hotels: page.hotels,
+          notice: `${inventoryFailureNotice}价格来自已配置的实时供应商 API，仍需在跳转预订前二次确认库存和政策。`,
+          providers
+        };
+      }
+      liveFailureNotice = '实时供应商 API 未返回可用结果。';
+    } catch (error) {
+      liveFailureNotice = '实时供应商 API 读取失败。';
+      console.warn('Supplier API failed, falling back to next provider:', error.message);
+    }
+  }
+
   if (providerEnabled && normalized.destinationType === 'city') {
     try {
       const liveResults = await searchAmadeus(normalized);
@@ -151,7 +188,7 @@ export async function searchHotels(params) {
           coverageCities: page.coverageCities,
           pagination: page.pagination,
           hotels: page.hotels,
-          notice: `${inventoryFailureNotice}价格来自已配置的实时供应商接口，仍需在跳转预订前二次确认库存和政策。`,
+          notice: `${inventoryFailureNotice}${liveFailureNotice}价格来自已配置的实时供应商接口，仍需在跳转预订前二次确认库存和政策。`,
           providers
         };
       }
@@ -168,7 +205,7 @@ export async function searchHotels(params) {
   return {
     source: 'demo',
     sourceLabel: '全国示例价格库',
-    mode: providerEnabled ? 'fallback' : 'demo',
+    mode: liveProviderEnabled ? 'fallback' : 'demo',
     generatedAt: new Date().toISOString(),
     query: normalized,
     total: page.total,
@@ -176,9 +213,9 @@ export async function searchHotels(params) {
     coverageCities: page.coverageCities,
     pagination: page.pagination,
     hotels: page.hotels,
-    notice: providerEnabled
-      ? `${inventoryFailureNotice}实时接口未返回可用结果，当前展示示例价格。`
-      : `${inventoryFailureNotice}当前未配置酒店供应商 API 或本地供应商文件，展示的是用于开发演示的全国示例价格；接入供应商后可查询真实价格。`,
+    notice: liveProviderEnabled
+      ? `${inventoryFailureNotice}${liveFailureNotice}实时接口未返回可用结果，当前展示示例价格。`
+      : `${inventoryFailureNotice}${liveFailureNotice}当前未配置酒店供应商 API 或本地供应商文件，展示的是用于开发演示的全国示例价格；接入供应商后可查询真实价格。`,
     providers
   };
 }
@@ -195,6 +232,7 @@ async function getProviderStatus({ includeCoverage = true } = {}) {
       configured: Boolean(process.env.AMADEUS_CLIENT_ID && process.env.AMADEUS_CLIENT_SECRET),
       baseUrl: process.env.AMADEUS_BASE_URL || 'https://test.api.amadeus.com'
     },
+    supplierApi: getSupplierApiStatus(),
     demo: {
       enabled: true,
       cities: cityCatalog.length

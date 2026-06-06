@@ -43,6 +43,18 @@ npm start
 
 远程 URL 使用和本地 CSV/JSON/JSONL 相同的字段格式，会和本地文件、网页导入文件一起合并，同酒店按最低价展示。远程文件默认缓存 60 秒，可用 `HOTEL_DATA_CACHE_SECONDS` 调整刷新间隔；本地文件会按修改时间和文件大小自动刷新。带 `token`、`key`、`secret` 等查询参数的 URL 在 `/api/status` 中会自动脱敏。
 
+如果供应商提供的是实时查价接口，而不是定时导出文件，也可以配置通用实时 API。系统会把目的地、日期、成人、房间、价格等查询参数传给供应商，并把对方返回的 CSV/JSON/JSONL 统一归一化到酒店结果里：
+
+```bash
+export HOTEL_SUPPLIER_API_URL=https://example.com/api/hotel-search
+export HOTEL_SUPPLIER_API_NAME=your_supplier_name
+export HOTEL_SUPPLIER_API_METHOD=GET
+export HOTEL_SUPPLIER_API_HEADERS='{"Authorization":"Bearer your_token"}'
+npm start
+```
+
+`GET` 会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 会传 JSON body。响应字段格式和本地供应商文件相同，支持嵌套 JSON、CSV、JSONL/NDJSON。
+
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。JSONL 可参考 [hotel-prices.jsonl.sample](data/hotel-prices.jsonl.sample)。嵌套 JSON 可参考 [hotel-prices.nested.sample.json](data/hotel-prices.nested.sample.json)，支持 `hotels/items/data/results/records/list` 作为酒店集合，也支持酒店下的 `rooms/roomTypes/roomList` 和房型下的 `rates/offers/prices` 多报价结构。核心字段是：
 
 ```text

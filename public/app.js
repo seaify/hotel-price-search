@@ -478,13 +478,15 @@ function renderRates(container, hotel) {
 function renderProviderStatus(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
   const remoteCount = Number(providers?.localInventory?.remoteCount || 0);
+  const supplierApiReady = Boolean(providers?.supplierApi?.configured);
   const apiReady = Boolean(providers?.amadeus?.configured);
   const coverage = providers?.localInventory?.coverage;
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
     ['真实覆盖城市', coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
     ['远程供应商文件', remoteCount ? `${remoteCount} 源` : '未接入', remoteCount ? 'on' : ''],
-    ['实时 API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
+    ['实时供应商 API', supplierApiReady ? '已配置' : '未配置', supplierApiReady ? 'on' : ''],
+    ['Amadeus API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
     ['示例价格库', `${providers?.demo?.cities || state.cities.length} 城`, 'demo']
   ];
 
@@ -498,11 +500,12 @@ function renderProviderStatus(providers) {
     `).join('')}
   `;
   elements.coverageDownloadButton.disabled = !localReady;
-  elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : apiReady ? '实时 API 已配置' : '全国示例价格库';
+  elements.sourcePill.textContent = localReady ? '供应商真实库存已接入' : supplierApiReady ? '实时供应商 API 已配置' : apiReady ? 'Amadeus API 已配置' : '全国示例价格库';
 }
 
 function getSourceText(source) {
   if (source === 'amadeus') return '实时';
+  if (source === 'supplier-api') return '实时';
   if (source === 'local' || source === '供应商CSV') return '真实';
   return '示例';
 }
@@ -583,6 +586,7 @@ function getStaticProviderStatus() {
       importedFiles: state.staticImportNames.map((filename) => ({ filename })),
       coverage: localReady ? summarizeStaticInventoryCoverage() : null
     },
+    supplierApi: { configured: false },
     amadeus: { configured: false },
     demo: { enabled: true, cities: getStaticCities().length }
   };
