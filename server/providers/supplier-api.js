@@ -16,7 +16,11 @@ export function getSupplierApiStatus() {
     method: methods.length === 1 ? methods[0] : methods.length ? 'MIXED' : getSupplierApiMethod(),
     methods,
     timeoutMs: firstSource?.timeoutMs || getSupplierApiTimeoutMs(),
-    headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0)
+    headersConfigured: sources.some((source) => Object.keys(source.headers || {}).length > 0),
+    requestMapConfigured: sources.some((source) =>
+      Object.keys(source.requestMap || {}).length > 0 ||
+      Object.keys(source.requestDefaults || {}).length > 0
+    )
   };
 }
 
@@ -181,7 +185,7 @@ function firstBoolean(candidates, fields) {
 function buildSupplierApiRequest(source, params) {
   const method = source.method || getSupplierApiMethod();
   const url = new URL(source.url);
-  const query = buildSupplierQuery(params);
+  const query = buildSupplierQuery(params, source);
   const headers = {
     Accept: 'application/json, text/csv, application/x-ndjson',
     ...(source.headers || getSupplierApiHeaders())
@@ -193,9 +197,7 @@ function buildSupplierApiRequest(source, params) {
   };
 
   if (method === 'GET') {
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
-    });
+    appendSearchParams(url, query);
   } else {
     init.headers = { 'Content-Type': 'application/json', ...headers };
     init.body = JSON.stringify(query);
@@ -204,8 +206,8 @@ function buildSupplierApiRequest(source, params) {
   return { url, init };
 }
 
-function buildSupplierQuery(params) {
-  return {
+function buildSupplierQuery(params, source = {}) {
+  const baseQuery = {
     city: params.city || '',
     destinationType: params.destinationType || '',
     keyword: params.keyword || '',
@@ -220,6 +222,43 @@ function buildSupplierQuery(params) {
     limit: params.limit,
     offset: params.offset
   };
+  const requestMap = source.requestMap || {};
+  const requestDefaults = cloneRequestDefaults(source.requestDefaults || {});
+  if (!Object.keys(requestMap).length) {
+    return { ...baseQuery, ...requestDefaults };
+  }
+
+  const mappedQuery = requestDefaults;
+  Object.entries(requestMap).forEach(([targetPath, sourcePath]) => {
+    const value = getMappedValue(baseQuery, sourcePath);
+    if (hasMappedValue(value)) setPathValue(mappedQuery, targetPath, value);
+  });
+  return mappedQuery;
+}
+
+function appendSearchParams(url, query, prefix = '') {
+  Object.entries(query || {}).forEach(([key, value]) => {
+    const nextKey = prefix ? `${prefix}.${key}` : key;
+    if (!hasMappedValue(value)) return;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      appendSearchParams(url, value, nextKey);
+      return;
+    }
+    url.searchParams.set(nextKey, Array.isArray(value) ? value.join(',') : String(value));
+  });
+}
+
+function setPathValue(target, path, value) {
+  const keys = String(path || '').split('.').map((key) => key.trim()).filter(Boolean);
+  if (!keys.length) return;
+  let current = target;
+  keys.slice(0, -1).forEach((key) => {
+    if (!current[key] || Array.isArray(current[key]) || typeof current[key] !== 'object') {
+      current[key] = {};
+    }
+    current = current[key];
+  });
+  current[keys[keys.length - 1]] = value;
 }
 
 function getSupplierApiSources() {
@@ -266,7 +305,9 @@ function getSupplierApiConfigSources() {
       method: normalizeMethod(item.method || getSupplierApiMethod()),
       headers: normalizeHeaders(item.headers || {}),
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
-      fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {})
+      fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {}),
+      requestMap: normalizeFieldMap(item.requestMap || item.queryMap || {}),
+      requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {})
     }));
 }
 
@@ -275,7 +316,7 @@ function mapSupplierRow(row, fieldMap = {}) {
   const mapped = { ...row };
   Object.entries(fieldMap).forEach(([targetField, sourcePath]) => {
     const value = getMappedValue(row, sourcePath);
-    if (value !== undefined && value !== null && String(value).trim() !== '') {
+    if (hasMappedValue(value)) {
       mapped[targetField] = value;
     }
   });
@@ -286,9 +327,13 @@ function getMappedValue(row, sourcePath) {
   const paths = Array.isArray(sourcePath) ? sourcePath : [sourcePath];
   for (const path of paths) {
     const value = getPathValue(row, path);
-    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+    if (hasMappedValue(value)) return value;
   }
   return undefined;
+}
+
+function hasMappedValue(value) {
+  return value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '');
 }
 
 function getPathValue(value, path) {
@@ -305,6 +350,16 @@ function normalizeFieldMap(value) {
     typeof sourcePath === 'string' ||
     (Array.isArray(sourcePath) && sourcePath.every((item) => typeof item === 'string'))
   ));
+}
+
+function normalizeRequestDefaults(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return {};
+  return cloneRequestDefaults(value);
+}
+
+function cloneRequestDefaults(value) {
+  if (!value || typeof value !== 'object') return value;
+  return JSON.parse(JSON.stringify(value));
 }
 
 function getSupplierApiName() {

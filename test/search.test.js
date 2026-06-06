@@ -1708,6 +1708,13 @@ describe('hotel search data', () => {
         path: url.pathname,
         method: request.method,
         city: url.searchParams.get('city'),
+        cityName: url.searchParams.get('cityName'),
+        arrivalDate: url.searchParams.get('arrivalDate'),
+        departureDate: url.searchParams.get('departureDate'),
+        pageSize: url.searchParams.get('pageSize'),
+        start: url.searchParams.get('start'),
+        locale: url.searchParams.get('locale'),
+        currency: url.searchParams.get('currency'),
         authorization: request.headers.authorization,
         apiKey: request.headers['x-api-key'],
         body: body ? JSON.parse(body) : null
@@ -1739,13 +1746,35 @@ describe('hotel search data', () => {
         name: '配置GET供应商',
         url: `http://127.0.0.1:${address.port}/get-prices?token=get-secret`,
         method: 'GET',
-        headers: { Authorization: 'Bearer get-token' }
+        headers: { Authorization: 'Bearer get-token' },
+        requestDefaults: {
+          locale: 'zh-CN',
+          currency: 'CNY'
+        },
+        requestMap: {
+          cityName: 'city',
+          arrivalDate: 'checkIn',
+          departureDate: 'checkOut',
+          pageSize: 'limit',
+          start: 'offset'
+        }
       },
       {
         name: '配置POST供应商',
         url: `http://127.0.0.1:${address.port}/post-prices?key=post-secret`,
         method: 'POST',
-        headers: { 'X-Api-Key': 'post-key' }
+        headers: { 'X-Api-Key': 'post-key' },
+        requestDefaults: {
+          channel: 'direct'
+        },
+        requestMap: {
+          'destination.cityName': 'city',
+          'stay.arrival': 'checkIn',
+          'stay.departure': 'checkOut',
+          'occupancy.adultCount': 'adults',
+          'pagination.pageSize': 'limit',
+          'pagination.offset': 'offset'
+        }
       }
     ]);
 
@@ -1778,13 +1807,25 @@ describe('hotel search data', () => {
       const getRequest = requests.find((item) => item.path === '/get-prices');
       const postRequest = requests.find((item) => item.path === '/post-prices');
       assert.equal(getRequest.method, 'GET');
-      assert.equal(getRequest.city, '武汉');
+      assert.equal(getRequest.city, null);
+      assert.equal(getRequest.cityName, '武汉');
+      assert.equal(getRequest.arrivalDate, '2026-06-06');
+      assert.equal(getRequest.departureDate, '2026-06-07');
+      assert.equal(getRequest.pageSize, '24');
+      assert.equal(getRequest.start, '0');
+      assert.equal(getRequest.locale, 'zh-CN');
+      assert.equal(getRequest.currency, 'CNY');
       assert.equal(getRequest.authorization, 'Bearer get-token');
       assert.equal(postRequest.method, 'POST');
       assert.equal(postRequest.apiKey, 'post-key');
-      assert.equal(postRequest.body.city, '武汉');
-      assert.equal(postRequest.body.checkIn, '2026-06-06');
-      assert.equal(postRequest.body.checkOut, '2026-06-07');
+      assert.equal(postRequest.body.channel, 'direct');
+      assert.equal(postRequest.body.city, undefined);
+      assert.equal(postRequest.body.destination.cityName, '武汉');
+      assert.equal(postRequest.body.stay.arrival, '2026-06-06');
+      assert.equal(postRequest.body.stay.departure, '2026-06-07');
+      assert.equal(postRequest.body.occupancy.adultCount, 2);
+      assert.equal(postRequest.body.pagination.pageSize, 24);
+      assert.equal(postRequest.body.pagination.offset, 0);
     } finally {
       clearInventoryCache();
       await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
