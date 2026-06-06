@@ -1,5 +1,6 @@
 {
   "name": "Hotel supplier inventory manifest",
-  "description": "Add public or signed CSV/JSON/JSONL supplier export URLs here. GitHub Pages will auto-load this file on startup.",
-  "sources": []
+  "description": "Add public or signed CSV/JSON/JSONL supplier export URLs here. Use cities/provinces to let GitHub Pages load only matching destination shards.",
+  "sources": [
+  ]
 }

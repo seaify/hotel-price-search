@@ -285,7 +285,7 @@ npm start
 
 也可以直接在网页左侧“导入价格”上传 CSV/JSON/JSONL，或填入一个允许浏览器访问的远程价格源 URL。Node 版上传和远程导入都会写入 `data/imports`，搜索会立即优先使用这些真实库存；可用 `HOTEL_IMPORT_DIR` 改成其他导入目录。GitHub Pages 静态版也支持浏览器内导入远程 CSV/JSON/JSONL，并会在浏览器里保存远程源、下次打开自动重载；远程服务需要允许跨域访问。静态版接入远程清单后，页面会在“接入状态”里显示每个远程源的加载结果、行数和失败摘要。
 
-GitHub Pages 静态版默认会自动读取 `hotel-inventory.manifest.json`。把各供应商按省份、城市或渠道拆成多个 CSV/JSON/JSONL 分片后写入 `public/hotel-inventory.manifest.json`，再执行 `npm run build:pages`，上线页面打开时就会自动加载这些远程价格。也可以用 URL 参数临时接源：
+GitHub Pages 静态版默认会自动读取 `hotel-inventory.manifest.json`。把各供应商按省份、城市或渠道拆成多个 CSV/JSON/JSONL 分片后写入 `public/hotel-inventory.manifest.json`，再执行 `npm run build:pages`，上线页面会按目的地自动加载对应远程价格。清单源带 `cities` / `provinces` 时会在搜索对应城市或省份时懒加载；不带范围或设置 `preload: true` 时会启动即加载。也可以用 URL 参数临时接源：
 
 ```text
 https://seaify.github.io/hotel-price-search/?inventoryManifestUrl=https%3A%2F%2Fexample.com%2Fhotel-suppliers.json
@@ -362,11 +362,13 @@ npm run build:pages
   "sources": [
     {
       "name": "ctrip-east",
-      "url": "https://example.com/hotel-prices/east-china.csv"
+      "url": "https://example.com/hotel-prices/east-china.csv",
+      "provinces": ["上海", "江苏", "浙江", "安徽", "福建", "江西", "山东"]
     },
     {
       "name": "meituan-south",
       "url": "https://example.com/hotel-prices/south-china.jsonl",
+      "cities": ["广州", "深圳", "珠海", "佛山", "东莞"],
       "fieldMap": {
         "id": "hotel.channelId",
         "masterHotelId": "hotel.standardId",
@@ -381,4 +383,4 @@ npm run build:pages
 }
 ```
 
-然后重新运行 `npm run build:pages` 并推送，构建后的 `docs/hotel-inventory.manifest.json` 会随站点一起发布。
+然后重新运行 `npm run build:pages` 并推送，构建后的 `docs/hotel-inventory.manifest.json` 会随站点一起发布。全国库存建议按城市或省份分片，避免用户打开页面时一次下载完整全国价格库。
