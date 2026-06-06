@@ -82,6 +82,55 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('sends request headers while loading protected remote supplier inventory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-shards-headers-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    const inventory = [
+      'id,name,province,city,source,price',
+      'bj-auth,北京认证酒店,北京,北京,认证供应商,488'
+    ].join('\n');
+    const server = await startInventoryServer(inventory, {
+      requiredHeaders: {
+        authorization: 'Bearer supplier-token',
+        'x-api-key': 'supplier-key'
+      }
+    });
+
+    try {
+      await assert.rejects(
+        () => splitInventoryShards({
+          rootDir: root,
+          inputFiles: [server.url],
+          outputDir: 'public/inventory',
+          clean: true
+        }),
+        /HTTP 401/
+      );
+
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [server.url],
+        headers: {
+          Authorization: 'Bearer supplier-token',
+          'X-Api-Key': 'supplier-key'
+        },
+        outputDir: 'public/inventory',
+        clean: true
+      });
+
+      assert.equal(result.rowCount, 1);
+      assert.equal(result.shardCount, 1);
+      assert.deepEqual(result.requestHeaders, {
+        Authorization: '***',
+        'X-Api-Key': '***'
+      });
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads gzip-compressed local CSV supplier files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-gzip-shards-'));
     await mkdir(join(root, 'supplier'), { recursive: true });
@@ -186,6 +235,10 @@ async function startInventoryServer(content, options = {}) {
       response.writeHead(404).end();
       return;
     }
+    if (!hasRequiredHeaders(request, options.requiredHeaders || {})) {
+      response.writeHead(401).end('unauthorized');
+      return;
+    }
     response.writeHead(200, { 'content-type': options.contentType || 'text/csv; charset=utf-8' });
     response.end(content);
   });
@@ -195,4 +248,10 @@ async function startInventoryServer(content, options = {}) {
     url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
+}
+
+function hasRequiredHeaders(request, requiredHeaders) {
+  return Object.entries(requiredHeaders).every(([name, value]) =>
+    request.headers[String(name).toLowerCase()] === value
+  );
 }

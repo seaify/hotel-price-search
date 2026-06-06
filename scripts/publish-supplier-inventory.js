@@ -18,6 +18,7 @@ export async function publishSupplierInventory(options = {}) {
     cwd: rootDir,
     inputFiles,
     fieldMap: options.fieldMap || options.fields || {},
+    headers: options.headers || options.requestHeaders || {},
     ...gateOptions
   });
 
@@ -39,6 +40,7 @@ export async function publishSupplierInventory(options = {}) {
     outputDir,
     manifestPath,
     fieldMap: options.fieldMap || options.fields || {},
+    headers: options.headers || options.requestHeaders || {},
     baseUrl: options.baseUrl || '',
     clean: options.clean !== false
   });
@@ -117,6 +119,7 @@ function parseArgs(argv) {
     else if (arg === '--manifest') options.manifestPath = argv[++index];
     else if (arg === '--base-url') options.baseUrl = argv[++index];
     else if (arg === '--field-map') options.fieldMap = argv[++index];
+    else if (arg === '--headers') options.headers = argv[++index];
     else if (arg === '--check-in') options.checkIn = argv[++index];
     else if (arg === '--check-out') options.checkOut = argv[++index];
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
@@ -176,6 +179,7 @@ Options:
   --manifest <file>    Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>     Optional absolute URL prefix for generated manifest source URLs
   --field-map <json-or-file> Map non-standard supplier fields to internal fields
+  --headers <json-or-file> Request headers for protected remote supplier URLs
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
   --min-hotels-per-city N         Default: 1

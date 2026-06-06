@@ -12,6 +12,7 @@ export function buildPublishSupplierInventoryOptions(env = process.env, cwd = pr
     rootDir: resolve(cwd),
     inputFiles,
     fieldMap: firstNonEmpty(env.HOTEL_SUPPLIER_FIELD_MAP_JSON, env.HOTEL_SUPPLIER_FIELD_MAP, ''),
+    headers: firstNonEmpty(env.HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON, env.HOTEL_SUPPLIER_INVENTORY_HEADERS, ''),
     checkIn: firstNonEmpty(env.HOTEL_SUPPLIER_CHECK_IN, ''),
     checkOut: firstNonEmpty(env.HOTEL_SUPPLIER_CHECK_OUT, ''),
     minHotelsPerCity: firstNonEmpty(env.HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY, ''),

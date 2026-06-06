@@ -13,6 +13,7 @@ export async function verifySupplierInventory(options = {}) {
     .map((inputFile) => normalizeInventoryInputReference(inputFile, cwd));
   if (!inputFiles.length) throw new Error('At least one supplier inventory input file is required.');
   const fieldMap = normalizeFieldMapReference(options.fieldMap || options.fields || {}, cwd);
+  const requestHeaders = normalizeJsonFileReference(options.headers || options.requestHeaders || {}, cwd);
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-'));
   const keepTemp = Boolean(options.keepTemp);
@@ -21,6 +22,7 @@ export async function verifySupplierInventory(options = {}) {
       rootDir: tempRoot,
       inputFiles,
       fieldMap,
+      headers: requestHeaders,
       clean: true,
       manifestPath: defaultManifestPath
     });
@@ -60,7 +62,9 @@ function buildNextCommands(inputFiles, options) {
   const inputs = inputFiles.map((inputFile) => `--input ${quoteShell(inputFile)}`).join(' ');
   const fieldMap = options.fieldMap || options.fields;
   const fieldMapOption = fieldMap ? ` --field-map ${quoteShell(formatFieldMapOption(fieldMap))}` : '';
-  const splitCommand = `npm run split:inventory-shards -- ${inputs}${fieldMapOption} --clean`;
+  const requestHeaders = options.headers || options.requestHeaders;
+  const headersOption = requestHeaders ? ` --headers ${quoteShell(formatHeadersOption(requestHeaders))}` : '';
+  const splitCommand = `npm run split:inventory-shards -- ${inputs}${fieldMapOption}${headersOption} --clean`;
   const envParts = ['HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true'];
   const minHotelsPerCity = getNonNegativeInteger(options.minHotelsPerCity, 1);
   const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 1);
@@ -93,6 +97,10 @@ function normalizeInputFiles(value) {
 }
 
 function normalizeFieldMapReference(value, cwd) {
+  return normalizeJsonFileReference(value, cwd);
+}
+
+function normalizeJsonFileReference(value, cwd) {
   if (typeof value !== 'string') return value;
   const text = value.trim();
   if (!text || text.startsWith('{')) return text;
@@ -126,6 +134,7 @@ function parseArgs(argv) {
     else if (arg === '--check-in') options.checkIn = argv[++index];
     else if (arg === '--check-out') options.checkOut = argv[++index];
     else if (arg === '--field-map') options.fieldMap = argv[++index];
+    else if (arg === '--headers') options.headers = argv[++index];
     else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
     else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
     else if (arg === '--min-priced-hotels-per-city') options.minPricedHotelsPerCity = argv[++index];
@@ -176,7 +185,29 @@ function formatText(result) {
 }
 
 function formatFieldMapOption(value) {
+  return formatJsonOption(value);
+}
+
+function formatHeadersOption(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text.startsWith('{')) return text;
+    try {
+      return JSON.stringify(maskHeaderValues(JSON.parse(text)));
+    } catch {
+      return '{"headers":"***"}';
+    }
+  }
+  return JSON.stringify(maskHeaderValues(value || {}));
+}
+
+function formatJsonOption(value) {
   return typeof value === 'string' ? value : JSON.stringify(value || {});
+}
+
+function maskHeaderValues(headers = {}) {
+  if (Array.isArray(headers) || typeof headers !== 'object') return {};
+  return Object.fromEntries(Object.keys(headers).map((name) => [name, '***']));
 }
 
 function formatCityList(cities) {
@@ -193,6 +224,7 @@ Options:
   --check-in DATE      Require city/date evidence covering this check-in date
   --check-out DATE     Require city/date evidence covering this check-out date
   --field-map <json-or-file> Map non-standard supplier fields to internal fields
+  --headers <json-or-file> Request headers for protected remote supplier URLs
   --min-hotels-per-city N         Default: 1
   --min-rows-per-city N           Default: 1
   --min-priced-hotels-per-city N  Default: 1

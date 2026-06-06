@@ -17,12 +17,13 @@ export async function splitInventoryShards(options = {}) {
   await mkdir(outputDir, { recursive: true });
 
   const fieldMap = await loadFieldMap(options.fieldMap || options.fields || {}, rootDir);
+  const requestHeaders = await loadRequestHeaders(options.headers || options.requestHeaders || {}, rootDir);
   const shards = new Map();
   const skippedRows = [];
   let rowCount = 0;
 
   for (const inputFile of inputFiles) {
-    const input = await loadInventoryInput(inputFile, rootDir);
+    const input = await loadInventoryInput(inputFile, rootDir, requestHeaders);
     const rows = parseInventory(input.content, input.extension).map((row) => mapInventoryRow(row, fieldMap));
     rows.forEach((row, index) => {
       rowCount += 1;
@@ -68,6 +69,7 @@ export async function splitInventoryShards(options = {}) {
   return {
     inputFiles,
     fieldMap,
+    requestHeaders: maskHeaders(requestHeaders),
     rowCount,
     shardCount: writtenShards.length,
     skippedRowCount: skippedRows.length,
@@ -75,6 +77,26 @@ export async function splitInventoryShards(options = {}) {
     shards: writtenShards,
     manifest
   };
+}
+
+async function loadRequestHeaders(value, rootDir) {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return {};
+    const content = text.startsWith('{')
+      ? text
+      : await readFile(resolve(rootDir, text), 'utf8');
+    return loadRequestHeaders(JSON.parse(content), rootDir);
+  }
+  if (Array.isArray(value) || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value)
+    .map(([name, headerValue]) => [String(name).trim(), String(headerValue ?? '').trim()])
+    .filter(([name, headerValue]) => name && headerValue));
+}
+
+function maskHeaders(headers = {}) {
+  return Object.fromEntries(Object.keys(headers).map((name) => [name, '***']));
 }
 
 async function loadFieldMap(value, rootDir) {
@@ -123,9 +145,9 @@ function getPathValue(value, path) {
   }, value);
 }
 
-async function loadInventoryInput(inputFile, rootDir) {
+async function loadInventoryInput(inputFile, rootDir, requestHeaders = {}) {
   if (isRemoteInventoryInput(inputFile)) {
-    const response = await fetch(inputFile);
+    const response = await fetch(inputFile, { headers: requestHeaders });
     if (!response.ok) throw new Error(`Failed to fetch supplier inventory URL ${inputFile}: HTTP ${response.status}`);
     const format = getInputFormat(inputFile, response.headers.get('content-type') || '');
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -216,6 +238,7 @@ function parseArgs(argv) {
     else if (arg === '--manifest') options.manifestPath = argv[++index];
     else if (arg === '--base-url') options.baseUrl = argv[++index];
     else if (arg === '--field-map') options.fieldMap = argv[++index];
+    else if (arg === '--headers') options.headers = argv[++index];
     else if (arg === '--clean') options.clean = true;
     else if (arg === '--no-manifest') options.buildManifest = false;
     else if (arg === '--help') options.help = true;
@@ -233,6 +256,7 @@ Options:
   --manifest <file>   Manifest file. Default: public/hotel-inventory.manifest.json
   --base-url <url>    Optional absolute URL prefix for generated manifest source URLs
   --field-map <json-or-file> Map non-standard supplier fields to internal fields
+  --headers <json-or-file> Request headers for protected remote supplier URLs
   --clean             Remove the output directory before writing shards
   --no-manifest       Only write shards, do not rebuild the manifest
 `);

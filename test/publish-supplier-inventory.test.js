@@ -47,7 +47,8 @@ describe('supplier inventory publisher', () => {
     };
     const inventoryServer = await startInventoryServer(inventoryJson, {
       path: '/supplier.json',
-      contentType: 'application/json'
+      contentType: 'application/json',
+      requiredHeaders: { authorization: 'Bearer publish-token' }
     });
 
     try {
@@ -55,6 +56,7 @@ describe('supplier inventory publisher', () => {
         rootDir: root,
         inputFiles: [inventoryServer.url],
         fieldMap,
+        headers: { Authorization: 'Bearer publish-token' },
         checkIn: '2026-06-06',
         checkOut: '2026-06-07',
         maxPriceAgeHours: 24,
@@ -108,6 +110,10 @@ async function startInventoryServer(content, options = {}) {
       response.writeHead(404).end();
       return;
     }
+    if (!hasRequiredHeaders(request, options.requiredHeaders || {})) {
+      response.writeHead(401).end('unauthorized');
+      return;
+    }
     response.writeHead(200, { 'content-type': contentType });
     response.end(content);
   });
@@ -117,4 +123,10 @@ async function startInventoryServer(content, options = {}) {
     url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
+}
+
+function hasRequiredHeaders(request, requiredHeaders) {
+  return Object.entries(requiredHeaders).every(([name, value]) =>
+    request.headers[String(name).toLowerCase()] === value
+  );
 }

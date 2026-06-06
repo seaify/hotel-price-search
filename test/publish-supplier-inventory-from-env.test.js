@@ -9,6 +9,7 @@ describe('supplier inventory env publisher config', () => {
         'https://supplier.example.com/export.csv?signature=a,b;c',
         'https://supplier.example.com/export-2.jsonl.gz?token=x;y,z'
       ]),
+      HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON: '{"Authorization":"Bearer supplier-token"}',
       HOTEL_SUPPLIER_FIELD_MAP_JSON: '{"id":"offer.id","price":"rate.sale"}',
       HOTEL_SUPPLIER_CHECK_IN: '2026-06-06',
       HOTEL_SUPPLIER_CHECK_OUT: '2026-06-07',
@@ -22,6 +23,7 @@ describe('supplier inventory env publisher config', () => {
       'https://supplier.example.com/export-2.jsonl.gz?token=x;y,z'
     ]);
     assert.equal(options.rootDir, '/repo');
+    assert.equal(options.headers, '{"Authorization":"Bearer supplier-token"}');
     assert.equal(options.fieldMap, '{"id":"offer.id","price":"rate.sale"}');
     assert.equal(options.checkIn, '2026-06-06');
     assert.equal(options.checkOut, '2026-06-07');

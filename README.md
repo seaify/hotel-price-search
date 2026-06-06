@@ -388,6 +388,7 @@ npm run build:pages
 仓库也内置了 `.github/workflows/publish-supplier-inventory.yml`，可以在 GitHub Actions 里手动触发或每天自动刷新供应商库存。先在仓库 Settings -> Secrets and variables -> Actions 里配置：
 
 - Secret `HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON`：供应商导出 URL 或文件路径数组，例如 `["https://supplier.example.com/nationwide.jsonl.gz?signature=..."]`
+- Secret `HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON`：可选，受保护导出 URL 的请求头，例如 `{"Authorization":"Bearer token","X-Api-Key":"key"}`
 - Secret `HOTEL_SUPPLIER_FIELD_MAP_JSON`：可选，供应商字段映射 JSON，例如 `{"id":"offer.id","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.sale"}`
 - Variable `HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY` / `HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY`：可选，每城最低酒店数和正价酒店数门槛，默认都是 `1`
 - Variable `HOTEL_SUPPLIER_CHECK_IN` / `HOTEL_SUPPLIER_CHECK_OUT` / `HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS`：可选，按入住日期和价格更新时间卡发布质量
@@ -412,7 +413,7 @@ npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-
 
 ```bash
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv
-npm run verify:supplier-inventory -- --input 'https://supplier.example.com/export/nationwide.csv?signature=...'
+npm run verify:supplier-inventory -- --input 'https://supplier.example.com/export/nationwide.csv?signature=...' --headers '{"Authorization":"Bearer token"}'
 npm run verify:supplier-inventory -- --input /absolute/path/custom-schema.json --field-map '{"id":"offer.id","name":"hotel.title","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.sale","checkIn":"stay.from","checkOut":"stay.to"}'
 npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z
 npm run publish:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z
@@ -420,7 +421,7 @@ npm run split:inventory-shards -- --input /absolute/path/supplier-nationwide.csv
 HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true HOTEL_PAGES_MIN_HOTELS_PER_CITY=20 HOTEL_PAGES_MIN_PRICED_HOTELS_PER_CITY=20 npm run build:pages
 ```
 
-`verify:supplier-inventory` 是 dry-run 验收：它会在临时目录里拆分供应商文件并审计全国覆盖、每城酒店数、每城正价报价数、指定入住日期和价格更新时间，不会污染 `public/inventory/`。如果供应商字段不是标准列名，用 `--field-map` 传 JSON 字符串或 JSON 文件，把内部字段映射到供应商字段路径。`publish:supplier-inventory` 会先执行同样验收，只有通过后才写入正式 `public/inventory/`、刷新 `public/hotel-inventory.manifest.json` 并构建 `docs/`。如果需要排查某一步，也可以手动执行 `split:inventory-shards` 和严格 `build:pages`。拆分脚本会读取供应商文件里的省市字段，把记录写入 `public/inventory/<province>/<city>.jsonl`。无法识别城市的行会被跳过并让命令返回非零退出码，便于先修数据再发布。
+`verify:supplier-inventory` 是 dry-run 验收：它会在临时目录里拆分供应商文件并审计全国覆盖、每城酒店数、每城正价报价数、指定入住日期和价格更新时间，不会污染 `public/inventory/`。如果供应商字段不是标准列名，用 `--field-map` 传 JSON 字符串或 JSON 文件，把内部字段映射到供应商字段路径；如果远程导出 URL 需要鉴权，用 `--headers` 传请求头 JSON 字符串或 JSON 文件。`publish:supplier-inventory` 会先执行同样验收，只有通过后才写入正式 `public/inventory/`、刷新 `public/hotel-inventory.manifest.json` 并构建 `docs/`。如果需要排查某一步，也可以手动执行 `split:inventory-shards` 和严格 `build:pages`。拆分脚本会读取供应商文件里的省市字段，把记录写入 `public/inventory/<province>/<city>.jsonl`。无法识别城市的行会被跳过并让命令返回非零退出码，便于先修数据再发布。
 
 发布前可以用覆盖审计确认是否真的达到全国覆盖：
 

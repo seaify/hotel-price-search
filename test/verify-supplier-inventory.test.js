@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { cityCatalog } from '../server/hotel-data.js';
@@ -103,6 +104,48 @@ describe('supplier inventory verifier', () => {
     }
   });
 
+  it('uses request headers while verifying protected remote supplier exports', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-headers-'));
+    const inventoryCsv = [
+      'id,name,province,city,source,price,checkIn,checkOut,updatedAt',
+      ...cityCatalog.map(({ province, city }, index) => [
+        `hotel-${index + 1}`,
+        `${city}认证验收酒店`,
+        province,
+        city,
+        '认证验收供应商',
+        360 + index,
+        '2026-06-01',
+        '2026-12-31',
+        '2026-06-06T12:00:00Z'
+      ].join(','))
+    ].join('\n');
+    const server = await startInventoryServer(inventoryCsv, {
+      requiredHeaders: { authorization: 'Bearer verify-token' }
+    });
+
+    try {
+      const result = await verifySupplierInventory({
+        cwd: root,
+        inputFiles: [server.url],
+        headers: { Authorization: 'Bearer verify-token' },
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07',
+        maxPriceAgeHours: 24,
+        referenceTime: '2026-06-06T18:00:00Z'
+      });
+
+      assert.equal(result.passed, true);
+      assert.equal(result.coverage.coveredCities, cityCatalog.length);
+      assert.match(result.nextCommands[0], /--headers/);
+      assert.doesNotMatch(result.nextCommands[0], /verify-token/);
+      assert.match(result.nextCommands[0], /\*\*\*/);
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails when city coverage and priced evidence are incomplete', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-supplier-verify-fail-'));
     await mkdir(join(root, 'supplier'), { recursive: true });
@@ -134,3 +177,32 @@ describe('supplier inventory verifier', () => {
     }
   });
 });
+
+async function startInventoryServer(content, options = {}) {
+  const routePath = options.path || '/supplier.csv';
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url, 'http://127.0.0.1');
+    if (requestUrl.pathname !== routePath) {
+      response.writeHead(404).end();
+      return;
+    }
+    if (!hasRequiredHeaders(request, options.requiredHeaders || {})) {
+      response.writeHead(401).end('unauthorized');
+      return;
+    }
+    response.writeHead(200, { 'content-type': options.contentType || 'text/csv; charset=utf-8' });
+    response.end(content);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}${routePath}?signature=a,b;c`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}
+
+function hasRequiredHeaders(request, requiredHeaders) {
+  return Object.entries(requiredHeaders).every(([name, value]) =>
+    request.headers[String(name).toLowerCase()] === value
+  );
+}
