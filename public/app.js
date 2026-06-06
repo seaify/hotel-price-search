@@ -479,13 +479,14 @@ function renderProviderStatus(providers) {
   const localReady = Boolean(providers?.localInventory?.readable);
   const remoteCount = Number(providers?.localInventory?.remoteCount || 0);
   const supplierApiReady = Boolean(providers?.supplierApi?.configured);
+  const supplierApiCount = Number(providers?.supplierApi?.apiCount || 0);
   const apiReady = Boolean(providers?.amadeus?.configured);
   const coverage = providers?.localInventory?.coverage;
   const rows = [
     ['本地/导入库存', localReady ? `${providers.localInventory.readableCount || 1} 源` : '未接入', localReady ? 'on' : ''],
     ['真实覆盖城市', coverage ? `${coverage.coveredCities}/${coverage.totalCities} 城` : '未统计', coverage?.coveredCities ? 'on' : ''],
     ['远程供应商文件', remoteCount ? `${remoteCount} 源` : '未接入', remoteCount ? 'on' : ''],
-    ['实时供应商 API', supplierApiReady ? '已配置' : '未配置', supplierApiReady ? 'on' : ''],
+    ['实时供应商 API', supplierApiReady ? `${supplierApiCount || 1} 源` : '未配置', supplierApiReady ? 'on' : ''],
     ['Amadeus API', apiReady ? '已配置' : '未配置', apiReady ? 'on' : ''],
     ['示例价格库', `${providers?.demo?.cities || state.cities.length} 城`, 'demo']
   ];

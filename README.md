@@ -53,6 +53,14 @@ export HOTEL_SUPPLIER_API_HEADERS='{"Authorization":"Bearer your_token"}'
 npm start
 ```
 
+多家实时供应商可以用逗号、分号或换行分隔，系统会并发查询并按同酒店合并报价，优先展示最低价：
+
+```bash
+export HOTEL_SUPPLIER_API_URLS=https://example.com/ctrip-live,https://example.com/meituan-live
+export HOTEL_SUPPLIER_API_NAMES=ctrip,meituan
+npm start
+```
+
 `GET` 会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 会传 JSON body。响应字段格式和本地供应商文件相同，支持嵌套 JSON、CSV、JSONL/NDJSON。
 
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。JSONL 可参考 [hotel-prices.jsonl.sample](data/hotel-prices.jsonl.sample)。嵌套 JSON 可参考 [hotel-prices.nested.sample.json](data/hotel-prices.nested.sample.json)，支持 `hotels/items/data/results/records/list` 作为酒店集合，也支持酒店下的 `rooms/roomTypes/roomList` 和房型下的 `rates/offers/prices` 多报价结构。核心字段是：

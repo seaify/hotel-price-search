@@ -4,11 +4,14 @@ const defaultSupplierApiTimeoutMs = 10_000;
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 
 export function getSupplierApiStatus() {
-  const url = getSupplierApiUrl();
+  const sources = getSupplierApiSources();
+  const firstSource = sources[0] || null;
   return {
-    configured: Boolean(url),
+    configured: sources.length > 0,
     name: getSupplierApiName(),
-    url: url ? redactUrl(url) : '',
+    url: firstSource ? redactUrl(firstSource.url) : '',
+    urls: sources.map((source) => redactUrl(source.url)),
+    apiCount: sources.length,
     method: getSupplierApiMethod(),
     timeoutMs: getSupplierApiTimeoutMs(),
     headersConfigured: Boolean(process.env.HOTEL_SUPPLIER_API_HEADERS)
@@ -21,7 +24,44 @@ export async function searchSupplierApiInventory(params) {
     return { hotels: [], status, rowCount: 0, sourceCount: 0 };
   }
 
-  const { url, init } = buildSupplierApiRequest(params);
+  const loads = await Promise.allSettled(getSupplierApiSources().map((source) => readSupplierApiSource(source, params)));
+  const loaded = loads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = loads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '实时供应商 API 读取失败。');
+  if (!loaded.length && sourceErrors.length) {
+    throw new Error(sourceErrors.join('；'));
+  }
+
+  const rows = loaded.flatMap((source) =>
+    source.rows.map((row) => ({
+      ...row,
+      source: row.source || row.provider || row.supplier || source.name,
+      __inventoryFile: source.name
+    }))
+  );
+  const nextStatus = {
+    ...status,
+    sourceCount: loaded.length,
+    sourceErrors,
+    rowCount: rows.length
+  };
+
+  return {
+    hotels: searchInventoryRows(rows, params, {
+      source: 'supplier-api',
+      sourceLabel: status.name
+    }),
+    status: nextStatus,
+    rowCount: rows.length,
+    sourceCount: loaded.length
+  };
+}
+
+async function readSupplierApiSource(source, params) {
+  const { url, init } = buildSupplierApiRequest(source, params);
   const response = await fetch(url, init);
   const text = await response.text();
   if (!response.ok) {
@@ -29,21 +69,15 @@ export async function searchSupplierApiInventory(params) {
   }
 
   const format = getSupplierApiResponseFormat(url, response.headers.get('content-type') || '');
-  const rows = parseInventory(text, format);
   return {
-    hotels: searchInventoryRows(rows, params, {
-      source: 'supplier-api',
-      sourceLabel: status.name
-    }),
-    status,
-    rowCount: rows.length,
-    sourceCount: 1
+    ...source,
+    rows: parseInventory(text, format)
   };
 }
 
-function buildSupplierApiRequest(params) {
+function buildSupplierApiRequest(source, params) {
   const method = getSupplierApiMethod();
-  const url = new URL(getSupplierApiUrl());
+  const url = new URL(source.url);
   const query = buildSupplierQuery(params);
   const headers = {
     Accept: 'application/json, text/csv, application/x-ndjson',
@@ -85,8 +119,28 @@ function buildSupplierQuery(params) {
   };
 }
 
-function getSupplierApiUrl() {
-  return process.env.HOTEL_SUPPLIER_API_URL || '';
+function getSupplierApiSources() {
+  const urls = [
+    process.env.HOTEL_SUPPLIER_API_URLS,
+    process.env.HOTEL_SUPPLIER_API_URL
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(/[\n,;]/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const names = [
+    process.env.HOTEL_SUPPLIER_API_NAMES,
+    process.env.HOTEL_SUPPLIER_API_NAME
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(/[\n,;]/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return urls.map((url, index) => ({
+    url,
+    name: names[index] || names[0] || getSupplierApiName()
+  }));
 }
 
 function getSupplierApiName() {
