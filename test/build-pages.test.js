@@ -60,4 +60,29 @@ describe('GitHub Pages builder', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('rejects manifests that do not meet the configured per-city hotel minimum', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-pages-minimums-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: 4,
+      hotelCount: 1
+    }));
+    await writeFile(join(root, 'public', 'index.html'), '<!doctype html><title>Hotel Search</title>');
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '低深度外部源', url: 'https://example.com/inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      await assert.rejects(
+        () => buildPages({ rootDir: root, minHotelsPerCity: 2 }),
+        /Below minimums: .* hotels 1\/2/
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

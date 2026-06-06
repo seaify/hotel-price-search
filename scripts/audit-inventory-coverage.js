@@ -10,6 +10,11 @@ export async function auditInventoryCoverage(options = {}) {
   const manifestPath = resolve(rootDir, options.manifestPath || defaultManifestPath);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const sources = getManifestSources(manifest);
+  const minHotelsPerCity = Math.max(
+    options.requireCityHotels ? 1 : 0,
+    getNonNegativeInteger(options.minHotelsPerCity, 0)
+  );
+  const minRowsPerCity = getNonNegativeInteger(options.minRowsPerCity, 0);
   const coveredCitySet = new Set();
   const unknownDestinations = new Set();
   const unscopedSources = [];
@@ -67,6 +72,21 @@ export async function auditInventoryCoverage(options = {}) {
       .filter((item) => Number(cityStatsByCity.get(item.city)?.hotelCount || 0) <= 0)
       .map(({ province, city }) => ({ province, city }))
     : [];
+  const citiesBelowMinimums = minHotelsPerCity || minRowsPerCity
+    ? cityCatalog
+      .map(({ province, city }) => {
+        const stats = cityStatsByCity.get(city) || {};
+        return {
+          province,
+          city,
+          rowCount: Number(stats.rowCount || 0),
+          hotelCount: Number(stats.hotelCount || 0),
+          minRowCount: minRowsPerCity,
+          minHotelCount: minHotelsPerCity
+        };
+      })
+      .filter((item) => item.hotelCount < minHotelsPerCity || item.rowCount < minRowsPerCity)
+    : [];
   const basePassed = missingCities.length === 0 && unscopedSources.length === 0 && unknownDestinations.size === 0;
   const summary = {
     manifestPath,
@@ -80,14 +100,17 @@ export async function auditInventoryCoverage(options = {}) {
     coverageRatio: cityCatalog.length ? Number((coveredCities.length / cityCatalog.length).toFixed(4)) : 0,
     coveredProvinces: coveredProvinceSet.size,
     totalProvinces: provinceSet.size,
+    minHotelsPerCity,
+    minRowsPerCity,
     citiesWithHotelStats: citiesWithHotelStats.length,
     totalCitiesWithRequiredHotelStats: options.requireCityHotels ? cityCatalog.length : 0,
     citiesWithoutHotelStats,
+    citiesBelowMinimums,
     missingCities,
     unscopedSources,
     unknownDestinations: [...unknownDestinations].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     sourceCoverage: sourceCoverage.sort((a, b) => b.cityCount - a.cityCount || a.name.localeCompare(b.name, 'zh-CN')),
-    passed: basePassed && citiesWithoutHotelStats.length === 0
+    passed: basePassed && citiesWithoutHotelStats.length === 0 && citiesBelowMinimums.length === 0
   };
 
   if (options.missingCsvPath) {
@@ -244,6 +267,13 @@ function sumSourceNumber(sources, field) {
   return sources.reduce((sum, source) => sum + Number(source?.[field] || 0), 0);
 }
 
+function getNonNegativeInteger(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return Math.floor(number);
+}
+
 function buildMissingCitiesCsv(summary) {
   const rows = [
     ['province', 'city'],
@@ -271,6 +301,9 @@ function formatAuditText(summary) {
   if (summary.citiesWithoutHotelStats.length) {
     lines.push(`Cities without hotel stats: ${summary.citiesWithoutHotelStats.slice(0, 20).map((item) => `${item.province}/${item.city}`).join(', ')}${summary.citiesWithoutHotelStats.length > 20 ? ` ... +${summary.citiesWithoutHotelStats.length - 20}` : ''}`);
   }
+  if (summary.citiesBelowMinimums.length) {
+    lines.push(`Cities below minimums: ${summary.citiesBelowMinimums.slice(0, 20).map((item) => `${item.province}/${item.city} hotels ${item.hotelCount}/${item.minHotelCount}, rows ${item.rowCount}/${item.minRowCount}`).join(', ')}${summary.citiesBelowMinimums.length > 20 ? ` ... +${summary.citiesBelowMinimums.length - 20}` : ''}`);
+  }
   if (summary.unscopedSources.length) {
     lines.push(`Unscoped sources: ${summary.unscopedSources.map((source) => source.name).join(', ')}`);
   }
@@ -288,6 +321,8 @@ function parseArgs(argv) {
     else if (arg === '--missing-csv') options.missingCsvPath = argv[++index];
     else if (arg === '--require-all-cities') options.requireAllCities = true;
     else if (arg === '--require-city-hotels') options.requireCityHotels = true;
+    else if (arg === '--min-hotels-per-city') options.minHotelsPerCity = argv[++index];
+    else if (arg === '--min-rows-per-city') options.minRowsPerCity = argv[++index];
     else if (arg === '--json') options.json = true;
     else if (arg === '--help') options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -303,6 +338,8 @@ Options:
   --missing-csv <file>    Write missing city CSV report
   --require-all-cities    Exit non-zero unless all catalog cities are explicitly covered
   --require-city-hotels   Also require cityStats hotelCount > 0 for every catalog city
+  --min-hotels-per-city N Require at least N cityStats hotels per city
+  --min-rows-per-city N   Require at least N cityStats rows per city
   --json                  Print full JSON summary
 `);
 }
@@ -316,7 +353,11 @@ if (isCli) {
     } else {
       const summary = await auditInventoryCoverage(options);
       console.log(options.json ? JSON.stringify(summary, null, 2) : formatAuditText(summary));
-      if (options.requireAllCities && !summary.passed) process.exitCode = 1;
+      const shouldGate = options.requireAllCities
+        || options.requireCityHotels
+        || getNonNegativeInteger(options.minHotelsPerCity, 0) > 0
+        || getNonNegativeInteger(options.minRowsPerCity, 0) > 0;
+      if (shouldGate && !summary.passed) process.exitCode = 1;
     }
   } catch (error) {
     console.error(error.message || error);

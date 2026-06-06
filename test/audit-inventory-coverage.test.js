@@ -94,4 +94,41 @@ describe('inventory coverage audit', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('flags cities below configured hotel and row minimums', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-coverage-minimums-'));
+    await mkdir(join(root, 'public'), { recursive: true });
+    const provinces = [...new Set(cityCatalog.map((item) => item.province))];
+    const cityStats = cityCatalog.map(({ province, city }) => ({
+      province,
+      city,
+      rowCount: city === '北京' ? 4 : 12,
+      hotelCount: city === '北京' ? 2 : 8
+    }));
+    await writeFile(join(root, 'public', 'hotel-inventory.manifest.json'), JSON.stringify({
+      sources: [{ name: '深度统计源', url: 'inventory/all.csv', provinces, cityStats }]
+    }));
+
+    try {
+      const summary = await auditInventoryCoverage({
+        rootDir: root,
+        minHotelsPerCity: 5,
+        minRowsPerCity: 10
+      });
+      assert.equal(summary.coveredCities, cityCatalog.length);
+      assert.equal(summary.missingCities.length, 0);
+      assert.equal(summary.citiesBelowMinimums.length, 1);
+      assert.deepEqual(summary.citiesBelowMinimums[0], {
+        province: '北京',
+        city: '北京',
+        rowCount: 4,
+        hotelCount: 2,
+        minRowCount: 10,
+        minHotelCount: 5
+      });
+      assert.equal(summary.passed, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

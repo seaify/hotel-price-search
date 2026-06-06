@@ -31,12 +31,21 @@ async function preparePagesInventory(rootDir, options) {
   const publicDir = options.publicDir || 'public';
   const inventoryDir = resolve(rootDir, options.inventoryDir || `${publicDir}/inventory`);
   const hasInventoryShards = await hasInventoryShardFiles(inventoryDir);
+  const minHotelsPerCity = getNonNegativeInteger(
+    options.minHotelsPerCity ?? process.env.HOTEL_PAGES_MIN_HOTELS_PER_CITY,
+    0
+  );
+  const minRowsPerCity = getNonNegativeInteger(
+    options.minRowsPerCity ?? process.env.HOTEL_PAGES_MIN_ROWS_PER_CITY,
+    0
+  );
   const requireFullCoverage = options.requireFullInventoryCoverage
     ?? isTruthy(process.env.HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE);
   const requireCityHotels = options.requireCityHotels
-    ?? (requireFullCoverage || isTruthy(process.env.HOTEL_PAGES_REQUIRE_CITY_HOTELS));
+    ?? (requireFullCoverage || minHotelsPerCity > 0 || isTruthy(process.env.HOTEL_PAGES_REQUIRE_CITY_HOTELS));
   const auditInventory = options.auditInventory
     ?? isTruthy(process.env.HOTEL_PAGES_AUDIT_INVENTORY);
+  const shouldBlockOnAudit = requireFullCoverage || requireCityHotels || minHotelsPerCity > 0 || minRowsPerCity > 0;
   const manifestPath = options.manifestPath || `${publicDir}/hotel-inventory.manifest.json`;
   let manifest = null;
   let coverage = null;
@@ -51,9 +60,15 @@ async function preparePagesInventory(rootDir, options) {
     });
   }
 
-  if (hasInventoryShards || requireFullCoverage || auditInventory) {
-    coverage = await auditInventoryCoverage({ rootDir, manifestPath, requireCityHotels });
-    if (requireFullCoverage && !coverage.passed) {
+  if (hasInventoryShards || shouldBlockOnAudit || auditInventory) {
+    coverage = await auditInventoryCoverage({
+      rootDir,
+      manifestPath,
+      requireCityHotels,
+      minHotelsPerCity,
+      minRowsPerCity
+    });
+    if (shouldBlockOnAudit && !coverage.passed) {
       throw new Error(formatCoverageFailure(coverage));
     }
   }
@@ -108,10 +123,15 @@ function formatCoverageFailure(coverage) {
     .slice(0, 8)
     .map((item) => `${item.province}/${item.city}`)
     .join(', ');
+  const belowMinimums = coverage.citiesBelowMinimums
+    .slice(0, 8)
+    .map((item) => `${item.province}/${item.city} hotels ${item.hotelCount}/${item.minHotelCount}, rows ${item.rowCount}/${item.minRowCount}`)
+    .join(', ');
   return [
     `Inventory coverage audit failed: ${coverage.coveredCities}/${coverage.totalCities} cities covered.`,
     missing ? `Missing: ${missing}${coverage.missingCities.length > 8 ? ` ... +${coverage.missingCities.length - 8}` : ''}` : '',
     withoutHotelStats ? `Without hotel stats: ${withoutHotelStats}${coverage.citiesWithoutHotelStats.length > 8 ? ` ... +${coverage.citiesWithoutHotelStats.length - 8}` : ''}` : '',
+    belowMinimums ? `Below minimums: ${belowMinimums}${coverage.citiesBelowMinimums.length > 8 ? ` ... +${coverage.citiesBelowMinimums.length - 8}` : ''}` : '',
     unscoped ? `Unscoped sources: ${unscoped}` : '',
     unknown ? `Unknown destinations: ${unknown}` : ''
   ].filter(Boolean).join(' ');
@@ -119,6 +139,13 @@ function formatCoverageFailure(coverage) {
 
 function isTruthy(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function getNonNegativeInteger(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return Math.floor(number);
 }
 
 const isCli = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
