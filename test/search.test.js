@@ -1072,10 +1072,24 @@ describe('hotel search data', () => {
     const previousFiles = process.env.HOTEL_DATA_FILES;
     const previousImportDir = process.env.HOTEL_IMPORT_DIR;
 
-    await writeFile(filePath, buildXlsxWorkbook([
-      ['id', 'name', 'province', 'city', 'district', 'address', 'star', 'rating', 'price', 'source', 'checkIn', 'checkOut', 'available'],
-      ['xlsx-001', '青岛Excel供应商酒店', '山东', '青岛', '市南', '青岛市市南区海景路 1 号', '5', '4.8', '788', 'Excel供应商', '2026-06-01', '2026-12-31', 'true']
-    ]));
+    await writeFile(filePath, buildXlsxWorkbook([], {
+      sheets: [
+        {
+          name: '青岛',
+          rows: [
+            ['id', 'name', 'province', 'city', 'district', 'address', 'star', 'rating', 'price', 'source', 'checkIn', 'checkOut', 'available'],
+            ['xlsx-001', '青岛Excel供应商酒店', '山东', '青岛', '市南', '青岛市市南区海景路 1 号', '5', '4.8', '788', 'Excel供应商', '2026-06-01', '2026-12-31', 'true']
+          ]
+        },
+        {
+          name: '济南',
+          rows: [
+            ['id', 'name', 'province', 'city', 'district', 'address', 'star', 'rating', 'price', 'source', 'checkIn', 'checkOut', 'available'],
+            ['xlsx-002', '济南Excel供应商酒店', '山东', '济南', '历下', '济南市历下区泉城路 1 号', '4', '4.7', '688', 'Excel供应商', '2026-06-01', '2026-12-31', 'true']
+          ]
+        }
+      ]
+    }));
 
     delete process.env.HOTEL_DATA_FILES;
     delete process.env.HOTEL_IMPORT_DIR;
@@ -1084,16 +1098,17 @@ describe('hotel search data', () => {
 
     try {
       const result = await searchHotels({
-        city: '青岛',
+        city: '山东省',
         keyword: 'Excel供应商',
         checkIn: '2026-06-06',
-        checkOut: '2026-06-07'
+        checkOut: '2026-06-07',
+        limit: '10'
       });
 
       assert.equal(result.source, 'local');
-      assert.equal(result.total, 1);
-      assert.equal(result.hotels[0].name, '青岛Excel供应商酒店');
-      assert.equal(result.hotels[0].price, 788);
+      assert.equal(result.total, 2);
+      assert.ok(result.hotels.some((hotel) => hotel.name === '青岛Excel供应商酒店'));
+      assert.ok(result.hotels.some((hotel) => hotel.name === '济南Excel供应商酒店'));
       assert.equal(result.hotels[0].providerName, 'Excel供应商');
     } finally {
       clearInventoryCache();
@@ -2708,7 +2723,7 @@ describe('hotel search data', () => {
       assert.equal(result.source, 'supplier-api');
       assert.equal(result.total, 2);
       assert.equal(result.coverageCities, 1);
-      assert.deepEqual(requests, [
+      assert.deepEqual(requests.sort((a, b) => a.path.localeCompare(b.path)), [
         { path: '/file-prices', cityId: 'FILE-320100' },
         { path: '/url-prices', cityId: 'URL-320100' }
       ]);
@@ -4107,18 +4122,27 @@ describe('hotel search data', () => {
   });
 });
 
-function buildXlsxWorkbook(rows) {
+function buildXlsxWorkbook(rows, options = {}) {
+  const sheets = normalizeWorkbookSheets(rows, options);
   const sharedStrings = [];
   const sharedStringIndexes = new Map();
-  const sheetRows = rows.map((row, rowIndex) => {
-    const rowNumber = rowIndex + 1;
-    const cells = row.map((value, columnIndex) => {
-      const text = String(value ?? '');
-      const sharedStringIndex = getSharedStringIndex(text, sharedStrings, sharedStringIndexes);
-      return `<c r="${formatCellReference(columnIndex, rowNumber)}" t="s"><v>${sharedStringIndex}</v></c>`;
+  const sheetEntries = Object.fromEntries(sheets.map((sheet, index) => {
+    const sheetRows = sheet.rows.map((row, rowIndex) => {
+      const rowNumber = rowIndex + 1;
+      const cells = row.map((value, columnIndex) => {
+        const text = String(value ?? '');
+        const sharedStringIndex = getSharedStringIndex(text, sharedStrings, sharedStringIndexes);
+        return `<c r="${formatCellReference(columnIndex, rowNumber)}" t="s"><v>${sharedStringIndex}</v></c>`;
+      }).join('');
+      return `<row r="${rowNumber}">${cells}</row>`;
     }).join('');
-    return `<row r="${rowNumber}">${cells}</row>`;
-  }).join('');
+    return [`xl/worksheets/sheet${index + 1}.xml`, [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+      `<sheetData>${sheetRows}</sheetData>`,
+      '</worksheet>'
+    ].join('')];
+  }));
 
   return buildZipArchive({
     '[Content_Types].xml': [
@@ -4127,7 +4151,7 @@ function buildXlsxWorkbook(rows) {
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
       '<Default Extension="xml" ContentType="application/xml"/>',
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
-      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join(''),
       '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
       '</Types>'
     ].join(''),
@@ -4140,28 +4164,40 @@ function buildXlsxWorkbook(rows) {
     'xl/workbook.xml': [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+      '<sheets>',
+      sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join(''),
+      '</sheets>',
       '</workbook>'
     ].join(''),
     'xl/_rels/workbook.xml.rels': [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
-      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+      sheets.map((sheet, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${escapeXml(sheet.target)}"/>`).join(''),
       '</Relationships>'
     ].join(''),
     'xl/sharedStrings.xml': [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${rows.flat().length}" uniqueCount="${sharedStrings.length}">`,
+      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sheets.flatMap((sheet) => sheet.rows.flat()).length}" uniqueCount="${sharedStrings.length}">`,
       sharedStrings.map((value) => `<si><t>${escapeXml(value)}</t></si>`).join(''),
       '</sst>'
     ].join(''),
-    'xl/worksheets/sheet1.xml': [
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
-      `<sheetData>${sheetRows}</sheetData>`,
-      '</worksheet>'
-    ].join('')
+    ...sheetEntries
   });
+}
+
+function normalizeWorkbookSheets(rows, options = {}) {
+  if (Array.isArray(options.sheets) && options.sheets.length) {
+    return options.sheets.map((sheet, index) => ({
+      name: sheet.name || `Sheet${index + 1}`,
+      rows: sheet.rows || [],
+      target: sheet.target || `worksheets/sheet${index + 1}.xml`
+    }));
+  }
+  return [{
+    name: 'Sheet1',
+    rows,
+    target: 'worksheets/sheet1.xml'
+  }];
 }
 
 function buildZipArchive(entries) {

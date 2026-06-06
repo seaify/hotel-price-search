@@ -13,7 +13,7 @@ npm start
 
 ## 接入真实价格
 
-最直接的方式是接入供应商、渠道管理系统或酒店价格聚合服务导出的 CSV/JSON/JSONL/XLSX 文件。可以接一个文件，也可以接多个供应商文件；本地和远程源也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz` 压缩包：
+最直接的方式是接入供应商、渠道管理系统或酒店价格聚合服务导出的 CSV/JSON/JSONL/XLSX 文件。可以接一个文件，也可以接多个供应商文件；XLSX 会读取全部工作表，适合供应商按省份、城市或渠道拆 sheet；本地和远程源也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz` 压缩包：
 
 ```bash
 export HOTEL_DATA_FILE=/absolute/path/to/hotel-prices.csv
@@ -409,7 +409,7 @@ npm run build:pages
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
 ```
 
-如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片。输入支持 CSV/JSON/JSONL/NDJSON/XLSX，也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz`；如果供应商给的是 ZIP 包，包内可以放多份 CSV/JSON/JSONL/NDJSON/XLSX，发布脚本会自动展开并合并拆分：
+如果供应商给的是一份全国大文件或对象存储签名 URL，可以先自动拆成按城市懒加载的 JSONL 分片。输入支持 CSV/JSON/JSONL/NDJSON/XLSX，XLSX 会合并所有工作表；也支持 `.csv.gz`、`.json.gz`、`.jsonl.gz`、`.ndjson.gz`、`.xlsx.gz`；如果供应商给的是 ZIP 包，包内可以放多份 CSV/JSON/JSONL/NDJSON/XLSX，发布脚本会自动展开并合并拆分：
 
 供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
 

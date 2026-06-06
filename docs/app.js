@@ -2393,24 +2393,26 @@ async function parseStaticXlsxInventory(content) {
   const workbookXml = textEntries.get('xl/workbook.xml');
   if (!workbookXml) throw new Error('Excel 文件缺少 xl/workbook.xml。');
 
-  const worksheetPath = findStaticXlsxWorksheetPath(workbookXml, textEntries);
-  const worksheetXml = textEntries.get(worksheetPath);
-  if (!worksheetXml) throw new Error(`Excel 文件缺少 ${worksheetPath}。`);
-
   const sharedStrings = parseStaticXlsxSharedStrings(textEntries.get('xl/sharedStrings.xml') || '');
-  return staticXlsxRowsToObjects(parseStaticXlsxWorksheetRows(worksheetXml, sharedStrings));
+  return findStaticXlsxWorksheetPaths(workbookXml, textEntries).flatMap((worksheetPath) => {
+    const worksheetXml = textEntries.get(worksheetPath);
+    if (!worksheetXml) throw new Error(`Excel 文件缺少 ${worksheetPath}。`);
+    return staticXlsxRowsToObjects(parseStaticXlsxWorksheetRows(worksheetXml, sharedStrings));
+  });
 }
 
-function findStaticXlsxWorksheetPath(workbookXml, textEntries) {
+function findStaticXlsxWorksheetPaths(workbookXml, textEntries) {
   const relationships = parseStaticXlsxWorkbookRelationships(textEntries.get('xl/_rels/workbook.xml.rels') || '');
+  const worksheetPaths = [];
   for (const sheet of matchStaticXmlTags(workbookXml, 'sheet')) {
     const attrs = parseStaticXmlAttributes(sheet.openingTag);
     const relationship = relationships.get(attrs['r:id'] || attrs.id);
-    if (relationship) return relationship;
+    if (relationship && !worksheetPaths.includes(relationship)) worksheetPaths.push(relationship);
   }
-  if (textEntries.has('xl/worksheets/sheet1.xml')) return 'xl/worksheets/sheet1.xml';
-  const worksheet = [...textEntries.keys()].find((name) => /^xl\/worksheets\/.+\.xml$/i.test(name));
-  if (worksheet) return worksheet;
+  if (worksheetPaths.length) return worksheetPaths;
+  if (textEntries.has('xl/worksheets/sheet1.xml')) return ['xl/worksheets/sheet1.xml'];
+  const worksheets = [...textEntries.keys()].filter((name) => /^xl\/worksheets\/.+\.xml$/i.test(name));
+  if (worksheets.length) return worksheets.sort((a, b) => a.localeCompare(b));
   throw new Error('Excel 文件没有可读取的工作表。');
 }
 

@@ -216,6 +216,45 @@ describe('inventory shard splitter', () => {
     }
   });
 
+  it('loads every worksheet from local XLSX supplier workbooks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hotel-multi-sheet-xlsx-shards-'));
+    await mkdir(join(root, 'supplier'), { recursive: true });
+    const inputFile = join(root, 'supplier', 'nationwide-tabs.xlsx');
+    await writeFile(inputFile, buildXlsxWorkbook([], {
+      sheets: [
+        {
+          name: '华北',
+          rows: [
+            ['id', 'name', 'province', 'city', 'source', 'price'],
+            ['bj-xlsx-tab-1', '北京多表Excel酒店', '北京', '北京', '多表Excel供应商', '588']
+          ]
+        },
+        {
+          name: '华东',
+          rows: [
+            ['id', 'name', 'province', 'city', 'source', 'price'],
+            ['sh-xlsx-tab-1', '上海多表Excel酒店', '上海', '上海', '多表Excel供应商', '688']
+          ]
+        }
+      ]
+    }));
+
+    try {
+      const result = await splitInventoryShards({
+        rootDir: root,
+        inputFiles: [inputFile],
+        clean: true
+      });
+      assert.equal(result.rowCount, 2);
+      assert.equal(result.shardCount, 2);
+      assert.equal(result.skippedRowCount, 0);
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('北京')));
+      assert.ok(result.manifest.sources.some((source) => source.cities?.includes('上海')));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads remote XLSX supplier URLs by spreadsheet content type', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hotel-remote-xlsx-shards-'));
     const workbook = buildXlsxWorkbook([
@@ -551,17 +590,26 @@ function buildZipArchive(entries) {
 }
 
 function buildXlsxWorkbook(rows, options = {}) {
+  const sheets = normalizeWorkbookSheets(rows, options);
   const sharedStrings = [];
   const sharedStringIndexes = new Map();
-  const sheetRows = rows.map((row, rowIndex) => {
-    const rowNumber = rowIndex + 1;
-    const cells = row.map((value, columnIndex) => {
-      const text = String(value ?? '');
-      const sharedStringIndex = getSharedStringIndex(text, sharedStrings, sharedStringIndexes);
-      return `<c r="${formatCellReference(columnIndex, rowNumber)}" t="s"><v>${sharedStringIndex}</v></c>`;
+  const sheetEntries = Object.fromEntries(sheets.map((sheet, index) => {
+    const sheetRows = sheet.rows.map((row, rowIndex) => {
+      const rowNumber = rowIndex + 1;
+      const cells = row.map((value, columnIndex) => {
+        const text = String(value ?? '');
+        const sharedStringIndex = getSharedStringIndex(text, sharedStrings, sharedStringIndexes);
+        return `<c r="${formatCellReference(columnIndex, rowNumber)}" t="s"><v>${sharedStringIndex}</v></c>`;
+      }).join('');
+      return `<row r="${rowNumber}">${cells}</row>`;
     }).join('');
-    return `<row r="${rowNumber}">${cells}</row>`;
-  }).join('');
+    return [`xl/worksheets/sheet${index + 1}.xml`, [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+      `<sheetData>${sheetRows}</sheetData>`,
+      '</worksheet>'
+    ].join('')];
+  }));
 
   return buildZipArchive({
     '[Content_Types].xml': [
@@ -570,7 +618,7 @@ function buildXlsxWorkbook(rows, options = {}) {
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
       '<Default Extension="xml" ContentType="application/xml"/>',
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
-      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join(''),
       '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>',
       '</Types>'
     ].join(''),
@@ -583,28 +631,40 @@ function buildXlsxWorkbook(rows, options = {}) {
     'xl/workbook.xml': [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+      '<sheets>',
+      sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join(''),
+      '</sheets>',
       '</workbook>'
     ].join(''),
     'xl/_rels/workbook.xml.rels': [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
-      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${escapeXml(options.worksheetTarget || 'worksheets/sheet1.xml')}"/>`,
+      sheets.map((sheet, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${escapeXml(sheet.target)}"/>`).join(''),
       '</Relationships>'
     ].join(''),
     'xl/sharedStrings.xml': [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${rows.flat().length}" uniqueCount="${sharedStrings.length}">`,
+      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sheets.flatMap((sheet) => sheet.rows.flat()).length}" uniqueCount="${sharedStrings.length}">`,
       sharedStrings.map((value) => `<si><t>${escapeXml(value)}</t></si>`).join(''),
       '</sst>'
     ].join(''),
-    'xl/worksheets/sheet1.xml': [
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
-      `<sheetData>${sheetRows}</sheetData>`,
-      '</worksheet>'
-    ].join('')
+    ...sheetEntries
   });
+}
+
+function normalizeWorkbookSheets(rows, options = {}) {
+  if (Array.isArray(options.sheets) && options.sheets.length) {
+    return options.sheets.map((sheet, index) => ({
+      name: sheet.name || `Sheet${index + 1}`,
+      rows: sheet.rows || [],
+      target: sheet.target || `worksheets/sheet${index + 1}.xml`
+    }));
+  }
+  return [{
+    name: 'Sheet1',
+    rows,
+    target: options.worksheetTarget || 'worksheets/sheet1.xml'
+  }];
 }
 
 function getSharedStringIndex(value, sharedStrings, sharedStringIndexes) {

@@ -12,29 +12,31 @@ export function parseXlsxInventory(buffer) {
   const workbookXml = textEntries.get('xl/workbook.xml');
   if (!workbookXml) throw new Error('XLSX supplier inventory is missing xl/workbook.xml.');
 
-  const worksheetPath = findFirstWorksheetPath(workbookXml, textEntries);
-  const worksheetXml = textEntries.get(worksheetPath);
-  if (!worksheetXml) throw new Error(`XLSX supplier inventory is missing ${worksheetPath}.`);
-
   const sharedStrings = parseSharedStrings(textEntries.get('xl/sharedStrings.xml') || '');
-  return rowsToObjects(parseWorksheetRows(worksheetXml, sharedStrings));
+  return findWorksheetPaths(workbookXml, textEntries).flatMap((worksheetPath) => {
+    const worksheetXml = textEntries.get(worksheetPath);
+    if (!worksheetXml) throw new Error(`XLSX supplier inventory is missing ${worksheetPath}.`);
+    return rowsToObjects(parseWorksheetRows(worksheetXml, sharedStrings));
+  });
 }
 
-function findFirstWorksheetPath(workbookXml, textEntries) {
+function findWorksheetPaths(workbookXml, textEntries) {
   const workbookPath = 'xl/workbook.xml';
   const relationships = parseWorkbookRelationships(textEntries.get('xl/_rels/workbook.xml.rels') || '', workbookPath);
   const sheetTags = matchTags(workbookXml, 'sheet');
+  const worksheetPaths = [];
 
   for (const sheet of sheetTags) {
     const attrs = parseAttributes(sheet.openingTag);
     const relationshipId = attrs['r:id'] || attrs.id;
     const relationship = relationships.get(relationshipId);
-    if (relationship) return relationship;
+    if (relationship && !worksheetPaths.includes(relationship)) worksheetPaths.push(relationship);
   }
 
-  if (textEntries.has('xl/worksheets/sheet1.xml')) return 'xl/worksheets/sheet1.xml';
-  const worksheet = [...textEntries.keys()].find((name) => /^xl\/worksheets\/.+\.xml$/i.test(name));
-  if (worksheet) return worksheet;
+  if (worksheetPaths.length) return worksheetPaths;
+  if (textEntries.has('xl/worksheets/sheet1.xml')) return ['xl/worksheets/sheet1.xml'];
+  const worksheets = [...textEntries.keys()].filter((name) => /^xl\/worksheets\/.+\.xml$/i.test(name));
+  if (worksheets.length) return worksheets.sort((a, b) => a.localeCompare(b));
   throw new Error('XLSX supplier inventory does not contain a worksheet.');
 }
 
