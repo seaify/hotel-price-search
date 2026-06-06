@@ -1958,33 +1958,42 @@ describe('hotel search data', () => {
     const supplierServer = createHttpServer((request, response) => {
       response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({
-        offers: [
-          {
-            offerId: 'mapped-live-001',
-            hotel: {
-              title: '厦门映射实时供应商酒店',
-              provinceName: '福建省',
-              cityName: '厦门市',
-              areaName: '思明',
-              location: '厦门市思明区环岛路 99 号',
-              stars: 5,
-              score: 4.8
-            },
-            rate: {
-              sale: 888,
-              list: 1088,
-              plan: '豪华海景房',
-              pay: '在线付',
-              cancel: '限时免费取消',
-              book: 'https://example.com/mapped-live-001'
-            },
-            stay: {
-              from: '2026-06-01',
-              to: '2026-12-31'
-            },
-            stock: 'available'
-          }
-        ]
+        success: true,
+        data: {
+          paging: {
+            totalCount: 42,
+            pageNo: 1,
+            pageSize: 24,
+            hasMore: true
+          },
+          hotelList: [
+            {
+              offerId: 'mapped-live-001',
+              hotel: {
+                title: '厦门映射实时供应商酒店',
+                provinceName: '福建省',
+                cityName: '厦门市',
+                areaName: '思明',
+                location: '厦门市思明区环岛路 99 号',
+                stars: 5,
+                score: 4.8
+              },
+              rate: {
+                sale: 888,
+                list: 1088,
+                plan: '豪华海景房',
+                pay: '在线付',
+                cancel: '限时免费取消',
+                book: 'https://example.com/mapped-live-001'
+              },
+              stay: {
+                from: '2026-06-01',
+                to: '2026-12-31'
+              },
+              stock: 'available'
+            }
+          ]
+        }
       }));
     });
     await new Promise((resolve) => supplierServer.listen(0, resolve));
@@ -1993,6 +2002,8 @@ describe('hotel search data', () => {
       name: '字段映射供应商',
       url: `http://127.0.0.1:${address.port}/mapped`,
       method: 'GET',
+      responsePath: 'data.hotelList',
+      paginationPath: 'data.paging',
       fieldMap: {
         id: 'offerId',
         name: 'hotel.title',
@@ -2023,7 +2034,14 @@ describe('hotel search data', () => {
       });
 
       assert.equal(result.source, 'supplier-api');
-      assert.equal(result.total, 1);
+      assert.equal(result.total, 42);
+      assert.equal(result.returned, 1);
+      assert.deepEqual(result.pagination, {
+        offset: 0,
+        limit: 24,
+        nextOffset: 24,
+        hasMore: true
+      });
       assert.equal(result.hotels[0].name, '厦门映射实时供应商酒店');
       assert.equal(result.hotels[0].province, '福建');
       assert.equal(result.hotels[0].city, '厦门');
@@ -2037,6 +2055,7 @@ describe('hotel search data', () => {
       assert.equal(result.hotels[0].cancellation, '限时免费取消');
       assert.equal(result.hotels[0].bookingUrl, 'https://example.com/mapped-live-001');
       assert.equal(result.hotels[0].providerName, '字段映射供应商');
+      assert.equal(result.providers.supplierApi.responsePathConfigured, true);
     } finally {
       clearInventoryCache();
       await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));

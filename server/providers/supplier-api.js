@@ -20,6 +20,10 @@ export function getSupplierApiStatus() {
     requestMapConfigured: sources.some((source) =>
       Object.keys(source.requestMap || {}).length > 0 ||
       Object.keys(source.requestDefaults || {}).length > 0
+    ),
+    responsePathConfigured: sources.some((source) =>
+      source.responsePath?.length > 0 ||
+      source.paginationPath?.length > 0
     )
   };
 }
@@ -83,7 +87,7 @@ async function readSupplierApiSource(source, params) {
   }
 
   const format = getSupplierApiResponseFormat(url, response.headers.get('content-type') || '');
-  const parsed = parseSupplierApiResponse(text, format);
+  const parsed = parseSupplierApiResponse(text, format, source);
   return {
     ...source,
     rows: parsed.rows,
@@ -91,28 +95,49 @@ async function readSupplierApiSource(source, params) {
   };
 }
 
-function parseSupplierApiResponse(text, format) {
-  const rows = parseInventory(text, format);
-  if (format !== '.json') return { rows, pagination: null };
-
-  try {
+function parseSupplierApiResponse(text, format, source = {}) {
+  if (format !== '.json') {
     return {
-      rows,
-      pagination: extractSupplierApiPagination(JSON.parse(text), rows.length)
+      rows: parseInventory(text, format),
+      pagination: null
     };
-  } catch {
-    return { rows, pagination: null };
   }
+
+  const payload = JSON.parse(text);
+  const rowPayload = extractSupplierApiRowsPayload(payload, source);
+  const rows = parseInventory(JSON.stringify(rowPayload), format);
+  return {
+    rows,
+    pagination: extractSupplierApiPagination(payload, rows.length, source, rowPayload)
+  };
 }
 
-function extractSupplierApiPagination(payload, rowCount) {
+function extractSupplierApiRowsPayload(payload, source) {
+  if (!source.responsePath?.length) return payload;
+  const value = getMappedValue(payload, source.responsePath);
+  if (!hasMappedValue(value)) {
+    throw new Error(`${source.name || '实时供应商'} 响应中没有找到 responsePath。`);
+  }
+  return value;
+}
+
+function extractSupplierApiPagination(payload, rowCount, source = {}, rowPayload = null) {
   if (!payload || Array.isArray(payload) || typeof payload !== 'object') return null;
+  const configuredPagination = source.paginationPath?.length
+    ? getMappedValue(payload, source.paginationPath)
+    : null;
   const candidates = [
+    configuredPagination,
     payload.pagination,
     payload.pageInfo,
     payload.page_info,
     payload.meta?.pagination,
     payload.meta,
+    rowPayload?.pagination,
+    rowPayload?.pageInfo,
+    rowPayload?.page_info,
+    rowPayload?.meta?.pagination,
+    rowPayload?.meta,
     payload
   ].filter((item) => item && typeof item === 'object' && !Array.isArray(item));
   const total = firstNumber(candidates, ['total', 'totalCount', 'total_count', 'totalResults', 'total_results', 'totalHotels', 'total_hotels', 'matchedCount', 'matched_count']);
@@ -142,7 +167,7 @@ function buildSupplierApiPage(loaded, hotels, params) {
   const limit = metadata.limit ?? requestedLimit;
   const returned = metadata.returned ?? hotels.length;
   const total = Math.max(metadata.total, offset + hotels.length);
-  const nextOffset = metadata.nextOffset ?? offset + returned;
+  const nextOffset = metadata.nextOffset ?? offset + (metadata.limit ? limit : returned);
   const hasMore = metadata.hasMore ?? nextOffset < total;
 
   return {
@@ -327,7 +352,9 @@ function getSupplierApiConfigSources() {
       timeoutMs: getPositiveInteger(item.timeoutMs, getSupplierApiTimeoutMs()),
       fieldMap: normalizeFieldMap(item.fieldMap || item.fields || {}),
       requestMap: normalizeFieldMap(item.requestMap || item.queryMap || {}),
-      requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {})
+      requestDefaults: normalizeRequestDefaults(item.requestDefaults || item.defaultParams || item.defaults || {}),
+      responsePath: normalizePathList(item.responsePath || item.resultsPath || item.recordsPath || item.itemsPath || item.dataPath),
+      paginationPath: normalizePathList(item.paginationPath || item.pageInfoPath)
     }));
 }
 
@@ -370,6 +397,14 @@ function normalizeFieldMap(value) {
     typeof sourcePath === 'string' ||
     (Array.isArray(sourcePath) && sourcePath.every((item) => typeof item === 'string'))
   ));
+}
+
+function normalizePathList(value) {
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
+  }
+  return [];
 }
 
 function normalizeRequestDefaults(value) {
