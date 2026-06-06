@@ -429,7 +429,8 @@ npm run configure:supplier-github-actions -- \
   --min-hotels-per-city 20 \
   --min-priced-hotels-per-city 20 \
   --max-price-age-hours 6 \
-  --trigger-dry-run
+  --trigger-dry-run \
+  --wait
 ```
 
 如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：

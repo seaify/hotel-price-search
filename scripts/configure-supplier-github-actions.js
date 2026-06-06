@@ -29,6 +29,9 @@ const variableOptionMap = [
 
 export async function buildSupplierGitHubActionsConfigPlan(options = {}) {
   const normalized = await normalizeOptions(options);
+  if (normalized.wait && !normalized.triggerDryRun) {
+    throw new Error('--wait requires --trigger-dry-run.');
+  }
   const secrets = secretOptionMap
     .map(([key, name]) => ({ name, value: normalized[key] }))
     .filter((item) => hasValue(item.value));
@@ -43,6 +46,9 @@ export async function buildSupplierGitHubActionsConfigPlan(options = {}) {
     ref: normalized.ref || 'main',
     preview: Boolean(normalized.preview),
     triggerDryRun: Boolean(normalized.triggerDryRun),
+    wait: Boolean(normalized.wait),
+    waitAttempts: Number(normalized.waitAttempts || 30),
+    waitIntervalMs: Number(normalized.waitIntervalMs || 2000),
     secrets,
     variables
   };
@@ -67,6 +73,11 @@ export async function configureSupplierGitHubActions(options = {}, runner = runG
         '-f',
         'dry_run=true'
       ], plan.repo));
+      if (plan.wait) {
+        const dryRun = await waitForDryRunWorkflowRun(plan, runner);
+        plan.dryRunRunId = dryRun.databaseId;
+        plan.dryRunRunUrl = dryRun.url || '';
+      }
     }
   }
   return plan;
@@ -77,10 +88,57 @@ export function formatSupplierGitHubActionsConfigPlan(plan) {
     `Repository: ${plan.repo || '(current repository)'}`,
     `Secrets to set: ${plan.secrets.length ? plan.secrets.map((item) => item.name).join(', ') : 'none'}`,
     `Variables to set: ${plan.variables.length ? plan.variables.map((item) => item.name).join(', ') : 'none'}`,
-    `Trigger dry-run workflow: ${plan.triggerDryRun ? 'yes' : 'no'}`
+    `Trigger dry-run workflow: ${plan.triggerDryRun ? 'yes' : 'no'}`,
+    `Wait for dry-run result: ${plan.wait ? 'yes' : 'no'}`
   ];
+  if (plan.dryRunRunId) lines.push(`Dry-run workflow run: ${plan.dryRunRunId}${plan.dryRunRunUrl ? ` (${plan.dryRunRunUrl})` : ''}`);
   if (plan.preview) lines.unshift('Preview mode: no GitHub settings were changed.');
   return lines.join('\n');
+}
+
+async function waitForDryRunWorkflowRun(plan, runner) {
+  for (let attempt = 0; attempt < plan.waitAttempts; attempt += 1) {
+    const result = await runner(buildGhArgs([
+      'run',
+      'list',
+      '--workflow',
+      workflowName,
+      '--branch',
+      plan.ref,
+      '--event',
+      'workflow_dispatch',
+      '--limit',
+      '5',
+      '--json',
+      'databaseId,createdAt,status,conclusion,url'
+    ], plan.repo));
+    const runs = parseWorkflowRuns(result.stdout);
+    const run = runs.find((item) => item.databaseId);
+    if (run) {
+      await runner(buildGhArgs([
+        'run',
+        'watch',
+        String(run.databaseId),
+        '--exit-status'
+      ], plan.repo));
+      return run;
+    }
+    if (attempt < plan.waitAttempts - 1) await sleep(plan.waitIntervalMs);
+  }
+  throw new Error(`Timed out waiting for ${workflowName} dry-run workflow to appear.`);
+}
+
+function parseWorkflowRuns(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
 async function normalizeOptions(options) {
@@ -188,6 +246,11 @@ function parseArgs(argv) {
     else if (arg === '--freshness-reference-time') options.freshnessReferenceTime = argv[++index];
     else if (arg === '--inventory-base-url') options.inventoryBaseUrl = argv[++index];
     else if (arg === '--trigger-dry-run') options.triggerDryRun = true;
+    else if (arg === '--wait') options.wait = true;
+    else if (arg === '--wait-timeout-seconds') {
+      options.waitAttempts = Math.max(1, Math.ceil(Number(argv[++index]) / 2));
+      options.waitIntervalMs = 2000;
+    }
     else if (arg === '--preview') options.preview = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--help') options.help = true;
@@ -229,6 +292,8 @@ Options:
   --freshness-reference-time TIMESTAMP    Reference timestamp for freshness
   --inventory-base-url URL                Absolute inventory shard base URL
   --trigger-dry-run                       Trigger Publish supplier inventory with dry_run=true
+  --wait                                  Wait for the triggered dry-run workflow to finish
+  --wait-timeout-seconds N                Dry-run wait timeout. Default: 60
   --preview                               Show what would be set without changing GitHub
   --json                                  Print JSON plan
   --help                                  Show this help text

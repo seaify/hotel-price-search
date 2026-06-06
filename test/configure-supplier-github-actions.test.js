@@ -119,6 +119,61 @@ describe('supplier GitHub Actions config helper', () => {
     }
   });
 
+  it('waits for the triggered dry-run workflow when requested', async () => {
+    const calls = [];
+    const plan = await configureSupplierGitHubActions({
+      repo: 'seaify/hotel-price-search',
+      inputFiles: ['https://supplier.example.com/nationwide.csv?token=secret-value'],
+      triggerDryRun: true,
+      wait: true,
+      waitAttempts: 1,
+      waitIntervalMs: 0
+    }, async (args, stdin = '') => {
+      calls.push({ args, stdin });
+      if (args[0] === 'run' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify([{
+            databaseId: 123456,
+            createdAt: '2026-06-06T12:00:00Z',
+            status: 'in_progress',
+            conclusion: '',
+            url: 'https://github.com/seaify/hotel-price-search/actions/runs/123456'
+          }]),
+          stderr: ''
+        };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    assert.equal(plan.dryRunRunId, 123456);
+    assert.equal(plan.dryRunRunUrl, 'https://github.com/seaify/hotel-price-search/actions/runs/123456');
+    assert.deepEqual(calls.at(-2).args, [
+      'run',
+      'list',
+      '--workflow',
+      'publish-supplier-inventory.yml',
+      '--branch',
+      'main',
+      '--event',
+      'workflow_dispatch',
+      '--limit',
+      '5',
+      '--json',
+      'databaseId,createdAt,status,conclusion,url',
+      '--repo',
+      'seaify/hotel-price-search'
+    ]);
+    assert.deepEqual(calls.at(-1).args, [
+      'run',
+      'watch',
+      '123456',
+      '--exit-status',
+      '--repo',
+      'seaify/hotel-price-search'
+    ]);
+    assert.ok(calls.every((call) => !call.args.join(' ').includes('secret-value')));
+  });
+
   it('rejects conflicting input sources', async () => {
     await assert.rejects(
       () => buildSupplierGitHubActionsConfigPlan({
@@ -126,6 +181,16 @@ describe('supplier GitHub Actions config helper', () => {
         inputsJson: '["https://supplier.example.com/b.csv"]'
       }),
       /either --inputs-json or repeated --input/
+    );
+  });
+
+  it('rejects waiting without a dry-run trigger', async () => {
+    await assert.rejects(
+      () => buildSupplierGitHubActionsConfigPlan({
+        inputFiles: ['https://supplier.example.com/a.csv'],
+        wait: true
+      }),
+      /--wait requires --trigger-dry-run/
     );
   });
 });
