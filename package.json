@@ -7,6 +7,7 @@
     "audit:inventory-coverage": "node scripts/audit-inventory-coverage.js",
     "build:inventory-manifest": "node scripts/build-inventory-manifest.js",
     "build:pages": "node scripts/build-pages.js",
+    "build:supplier-onboarding-pack": "node scripts/build-supplier-onboarding-pack.js",
     "check:supplier-inventory-config": "node scripts/check-supplier-inventory-config.js",
     "dev": "node server/index.js",
     "publish:supplier-inventory": "node scripts/publish-supplier-inventory.js",

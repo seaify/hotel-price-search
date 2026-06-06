@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>酒店价格供应商交付包</title>
+  <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:880px;margin:40px auto;padding:0 20px;line-height:1.7;color:#17202a}h1{font-size:28px}a{color:#0f766e}li{margin:8px 0}.note{padding:14px 16px;background:#f7f9f8;border:1px solid #dce7e2;border-radius:8px}</style>
+</head>
+<body>
+  <h1>酒店价格供应商交付包</h1>
+  <p class="note">请按模板交付 CSV/JSON/JSONL/XLSX/ZIP 数据。正式发布需要覆盖全国城市目录中的 393 个城市，并提供可解析正价和价格更新时间证据。</p>
+  <ul>
+    <li><a href="README.md" download>交付说明</a></li>
+    <li><a href="supplier-inventory.template.csv" download>标准 CSV 模板</a></li>
+    <li><a href="supplier-source-manifest.template.json" download>多源清单模板</a></li>
+    <li><a href="supplier-field-map.template.json" download>字段映射模板</a></li>
+    <li><a href="city-catalog.csv" download>全国城市目录</a></li>
+    <li><a href="required-fields.md" download>字段要求</a></li>
+    <li><a href="sample-valid-inventory.csv" download>示例库存 CSV</a></li>
+  </ul>
+  <p>数据准备好后，先在 GitHub Actions 的 Publish supplier inventory 里勾选 dry_run 预检；通过后再取消 dry_run 正式发布。</p>
+</body>
+</html>

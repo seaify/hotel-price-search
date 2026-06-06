@@ -30,6 +30,9 @@ describe('GitHub Pages builder', () => {
       const publicStaticData = await readFile(join(root, 'public', 'static-data.js'), 'utf8');
       const csvTemplate = await readFile(join(root, 'docs', 'supplier-inventory.template.csv'), 'utf8');
       const manifestTemplate = JSON.parse(await readFile(join(root, 'docs', 'supplier-source-manifest.template.json'), 'utf8'));
+      const onboardingReadme = await readFile(join(root, 'docs', 'supplier-onboarding', 'README.md'), 'utf8');
+      const onboardingCityCatalog = await readFile(join(root, 'docs', 'supplier-onboarding', 'city-catalog.csv'), 'utf8');
+      const onboardingFieldMap = JSON.parse(await readFile(join(root, 'docs', 'supplier-onboarding', 'supplier-field-map.template.json'), 'utf8'));
 
       assert.equal(result.inventory.generatedManifest, true);
       assert.equal(result.inventory.sourceCount, 1);
@@ -54,6 +57,9 @@ describe('GitHub Pages builder', () => {
       assert.equal(manifest.sources[0].minPrice, 588);
       assert.equal(csvTemplate, 'id,name,province,city,price,source\n');
       assert.equal(manifestTemplate.sources[0].name, 'template-supplier');
+      assert.match(onboardingReadme, new RegExp(`${cityCatalog.length} 个城市`));
+      assert.equal(onboardingCityCatalog.trim().split('\n').length, cityCatalog.length + 1);
+      assert.equal(onboardingFieldMap.chineseCsvFieldMapExample.price, '最低价');
       assert.deepEqual(manifest.sources[0].cityStats, [
         { province: '广东', city: '深圳', rowCount: 1, hotelCount: 1, pricedRowCount: 1, pricedHotelCount: 1, minPrice: 588, dateStats: [{ checkIn: '2026-06-01', checkOut: '2026-12-31', rowCount: 1, hotelCount: 1, pricedRowCount: 1, pricedHotelCount: 1, minPrice: 588 }] }
       ]);

@@ -1,0 +1,45 @@
+{
+  "name": "nationwide hotel supplier sources",
+  "description": "Use this file when one supplier export is not enough. Put public or signed export URLs here for GitHub Pages, or protected URLs plus headers in GitHub Actions secrets for scheduled publishing.",
+  "sources": [
+    {
+      "name": "supplier-a-nationwide",
+      "url": "https://supplier.example.com/exports/nationwide-hotels.jsonl.gz",
+      "fieldMap": {
+        "id": "offer.id",
+        "masterHotelId": "hotel.standardId",
+        "name": "hotel.name",
+        "province": "hotel.provinceName",
+        "city": "hotel.cityName",
+        "district": "hotel.districtName",
+        "address": "hotel.address",
+        "star": "hotel.star",
+        "rating": "hotel.rating",
+        "price": "rate.salePrice",
+        "totalPrice": "rate.totalPrice",
+        "source": "supplierName",
+        "checkIn": "stay.checkIn",
+        "checkOut": "stay.checkOut",
+        "available": "rate.available",
+        "updatedAt": "rate.updatedAt",
+        "bookingUrl": "rate.bookingUrl"
+      }
+    },
+    {
+      "name": "supplier-b-city-shards",
+      "url": "https://supplier.example.com/exports/guangdong-shenzhen.csv",
+      "cities": ["深圳"],
+      "fieldMap": {
+        "id": "酒店ID",
+        "name": "酒店名称",
+        "province": "省份",
+        "city": "城市",
+        "price": "最低价",
+        "source": "供应商",
+        "checkIn": "入住日期",
+        "checkOut": "离店日期",
+        "updatedAt": "更新时间"
+      }
+    }
+  ]
+}

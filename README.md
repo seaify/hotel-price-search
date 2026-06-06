@@ -404,6 +404,12 @@ workflow 会先运行测试，再执行 `npm run publish:supplier-inventory:env`
 npm run check:supplier-inventory-config
 ```
 
+给供应商或渠道方对接前，可以先生成交付包，里面包含标准 CSV 模板、多源清单模板、字段映射模板、全国城市目录和字段说明；`npm run build:pages` 也会自动生成并发布到 `supplier-onboarding/`：
+
+```bash
+npm run build:supplier-onboarding-pack
+```
+
 如果供应商输入已经配置到环境变量，也可以在本地或 CI 里跑同样的 dry-run 验证，不发布任何分片：
 
 ```bash

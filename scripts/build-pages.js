@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { cityCatalog } from '../server/hotel-data.js';
 import { auditInventoryCoverage } from './audit-inventory-coverage.js';
 import { buildInventoryManifest } from './build-inventory-manifest.js';
+import { buildSupplierOnboardingPack } from './build-supplier-onboarding-pack.js';
 
 const defaultRootDir = fileURLToPath(new URL('..', import.meta.url));
 const inventoryExtensions = new Set(['.csv', '.json', '.jsonl', '.ndjson']);
@@ -26,6 +27,7 @@ export async function buildPages(options = {}) {
   await writeFile(resolve(publicDir, 'static-data.js'), staticData, 'utf8');
   await writeFile(resolve(publicDir, 'inventory-readiness.json'), `${JSON.stringify(readiness, null, 2)}\n`, 'utf8');
   await copySupplierTemplates(rootDir, publicDir);
+  await buildSupplierOnboardingPack({ rootDir, outputDir: resolve(publicDir, 'supplier-onboarding') });
   await rm(docsDir, { recursive: true, force: true });
   await copyPublicDirectory(publicDir, docsDir);
   await writeFile(resolve(docsDir, '.nojekyll'), '', 'utf8');

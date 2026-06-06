@@ -1,0 +1,4 @@
+id,masterHotelId,name,province,city,district,address,star,rating,reviews,price,totalPrice,currency,source,checkIn,checkOut,available,updatedAt,bookingUrl
+sample-bj-001,CN-BJ-SAMPLE-001,北京供应商示例酒店,北京,北京,朝阳,北京市朝阳区示例路 1 号,5,4.8,1200,688,688,CNY,供应商示例,2026-06-06,2026-06-07,true,2026-06-06T12:00:00Z,https://supplier.example.com/hotels/sample-bj-001
+sample-sh-001,CN-SH-SAMPLE-001,上海供应商示例酒店,上海,上海,浦东,上海市浦东新区示例路 1 号,5,4.7,980,728,728,CNY,供应商示例,2026-06-06,2026-06-07,true,2026-06-06T12:00:00Z,https://supplier.example.com/hotels/sample-sh-001
+sample-sz-001,CN-SZ-SAMPLE-001,深圳供应商示例酒店,广东,深圳,南山,深圳市南山区示例路 1 号,4,4.6,860,588,588,CNY,供应商示例,2026-06-06,2026-06-07,true,2026-06-06T12:00:00Z,https://supplier.example.com/hotels/sample-sz-001
