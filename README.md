@@ -389,6 +389,7 @@ npm run build:pages
 
 ```bash
 npm run build:inventory-manifest
+npm run audit:inventory-coverage -- --require-all-cities
 npm run build:pages
 ```
 
@@ -397,3 +398,12 @@ npm run build:pages
 ```bash
 npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-price-search/
 ```
+
+发布前可以用覆盖审计确认是否真的达到全国覆盖：
+
+```bash
+npm run audit:inventory-coverage
+npm run audit:inventory-coverage -- --require-all-cities --missing-csv missing-cities.csv
+```
+
+`--require-all-cities` 会在任一城市缺库存分片、存在未知城市名或存在未标注 `cities` / `provinces` 的源时返回非零退出码，适合放进部署流水线，防止“全国都要有”的数据目标被漏掉。

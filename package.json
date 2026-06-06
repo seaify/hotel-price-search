@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "audit:inventory-coverage": "node scripts/audit-inventory-coverage.js",
     "build:inventory-manifest": "node scripts/build-inventory-manifest.js",
     "build:pages": "node scripts/build-pages.js",
     "dev": "node server/index.js",
