@@ -9,6 +9,7 @@
     "build:pages": "node scripts/build-pages.js",
     "dev": "node server/index.js",
     "split:inventory-shards": "node scripts/split-inventory-shards.js",
+    "verify:supplier-inventory": "node scripts/verify-supplier-inventory.js",
     "start": "node server/index.js",
     "test": "node --test"
   },

@@ -399,12 +399,16 @@ npm run build:inventory-manifest -- --base-url https://static.example.com/hotel-
 
 如果供应商给的是一份全国大文件，可以先自动拆成按城市懒加载的 JSONL 分片：
 
+供应商 CSV 可以从 [data/supplier-inventory.template.csv](data/supplier-inventory.template.csv) 开始；最低要有 `id`、`name`、`province`、`city`、`price`、`source`。如果要按入住日期和价格新鲜度严格验收，还需要 `checkIn`、`checkOut`、`available`、`updatedAt`。
+
 ```bash
+npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv
+npm run verify:supplier-inventory -- --input /absolute/path/supplier-nationwide.csv --check-in 2026-06-06 --check-out 2026-06-07 --min-hotels-per-city 20 --min-priced-hotels-per-city 20 --max-price-age-hours 6 --reference-time 2026-06-06T12:00:00Z
 npm run split:inventory-shards -- --input /absolute/path/supplier-nationwide.csv --clean
-npm run build:pages
+HOTEL_PAGES_REQUIRE_FULL_INVENTORY_COVERAGE=true HOTEL_PAGES_MIN_HOTELS_PER_CITY=20 HOTEL_PAGES_MIN_PRICED_HOTELS_PER_CITY=20 npm run build:pages
 ```
 
-拆分脚本会读取供应商文件里的省市字段，把记录写入 `public/inventory/<province>/<city>.jsonl`，并自动刷新 `public/hotel-inventory.manifest.json`。无法识别城市的行会被跳过并让命令返回非零退出码，便于先修数据再发布。
+`verify:supplier-inventory` 是 dry-run 验收：它会在临时目录里拆分供应商文件并审计全国覆盖、每城酒店数、每城正价报价数、指定入住日期和价格更新时间，不会污染 `public/inventory/`。通过后再执行 `split:inventory-shards` 写入正式分片。拆分脚本会读取供应商文件里的省市字段，把记录写入 `public/inventory/<province>/<city>.jsonl`，并自动刷新 `public/hotel-inventory.manifest.json`。无法识别城市的行会被跳过并让命令返回非零退出码，便于先修数据再发布。
 
 发布前可以用覆盖审计确认是否真的达到全国覆盖：
 
