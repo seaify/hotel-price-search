@@ -9,6 +9,7 @@
     "build:pages": "node scripts/build-pages.js",
     "build:supplier-onboarding-pack": "node scripts/build-supplier-onboarding-pack.js",
     "check:supplier-inventory-config": "node scripts/check-supplier-inventory-config.js",
+    "configure:supplier-github-actions": "node scripts/configure-supplier-github-actions.js",
     "dev": "node server/index.js",
     "publish:supplier-inventory": "node scripts/publish-supplier-inventory.js",
     "publish:supplier-inventory:env": "node scripts/publish-supplier-inventory-from-env.js",

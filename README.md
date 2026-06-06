@@ -416,6 +416,22 @@ npm run build:supplier-onboarding-pack
 npm run verify:supplier-inventory:env
 ```
 
+拿到供应商 URL 后，也可以用 CLI 一次性写入 GitHub Actions secrets/variables，并触发 dry-run。命令不会把 secret 值打印出来；正式执行前可先加 `--preview` 查看会设置哪些项：
+
+```bash
+npm run configure:supplier-github-actions -- \
+  --repo seaify/hotel-price-search \
+  --input 'https://supplier.example.com/nationwide.jsonl.gz?signature=...' \
+  --headers-json '{"Authorization":"Bearer token"}' \
+  --field-map-json '{"id":"offer.id","name":"hotel.name","province":"hotel.provinceName","city":"hotel.cityName","price":"rate.salePrice"}' \
+  --check-in 2026-06-06 \
+  --check-out 2026-06-07 \
+  --min-hotels-per-city 20 \
+  --min-priced-hotels-per-city 20 \
+  --max-price-age-hours 6 \
+  --trigger-dry-run
+```
+
 如果供应商已经给了多份 CSV/JSON/JSONL 分片文件，也可以放在 `public/inventory/` 下自动生成清单：
 
 ```bash
