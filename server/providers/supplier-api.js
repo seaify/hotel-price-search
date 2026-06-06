@@ -1,7 +1,10 @@
-import { resolveDestination } from '../hotel-data.js';
+import { cityCatalog, resolveDestination } from '../hotel-data.js';
 import { parseInventory, searchInventoryRows } from './local-inventory.js';
 
 const defaultSupplierApiTimeoutMs = 10_000;
+const defaultSupplierCoverageProbeLimit = 1;
+const defaultSupplierCoverageProbeConcurrency = 4;
+const maxSupplierCoverageProbeConcurrency = 20;
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const supplierAuthCache = new Map();
 
@@ -51,13 +54,7 @@ export async function searchSupplierApiInventory(params) {
     throw new Error(sourceErrors.join('；'));
   }
 
-  const rows = loaded.flatMap((source) =>
-    source.rows.map((row) => ({
-      ...mapSupplierRow(row, source.fieldMap),
-      source: row.source || row.provider || row.supplier || source.name,
-      __inventoryFile: source.name
-    }))
-  );
+  const rows = loaded.flatMap((source) => mapSupplierRows(source, source.rows));
   const nextStatus = {
     ...status,
     sourceCount: loaded.reduce((sum, source) => sum + Number(source.sourceCount || 1), 0),
@@ -82,6 +79,75 @@ export async function searchSupplierApiInventory(params) {
     sourceCount: nextStatus.sourceCount,
     ...(upstreamPage ? upstreamPage : {})
   };
+}
+
+export async function probeSupplierApiCoverage(params, options = {}) {
+  const status = getSupplierApiStatus();
+  const sources = getSupplierApiSources();
+  const destination = resolveDestination(params.city);
+  const cities = getSupplierCoverageCities(destination, options);
+  const probeLimit = getSupplierCoverageProbeLimit(options.probeLimit);
+  const concurrency = getSupplierCoverageProbeConcurrency(options.concurrency);
+  const startedAt = Date.now();
+
+  if (!status.configured || !cities.length) {
+    return buildSupplierCoverageSummary({
+      status,
+      cities,
+      sourceResults: [],
+      sourceErrors: [],
+      requestCount: 0,
+      probeLimit,
+      concurrency,
+      generatedMs: Date.now() - startedAt,
+      query: buildSupplierCoverageQuery(params, destination)
+    });
+  }
+
+  const tasks = cities.flatMap((city) =>
+    sources.map((source) => async () => {
+      const cityParams = {
+        ...params,
+        city: city.city,
+        destinationType: 'city',
+        limit: probeLimit,
+        offset: 0
+      };
+      const loaded = await readSupplierApiSource(source, cityParams);
+      const rows = mapSupplierRows(source, loaded.rows, city);
+      const hotels = searchInventoryRows(rows, cityParams, {
+        source: 'supplier-api',
+        sourceLabel: source.name
+      });
+
+      return {
+        province: city.province,
+        city: city.city,
+        sourceName: source.name,
+        rowCount: rows.length,
+        hotelCount: hotels.length
+      };
+    })
+  );
+  const loads = await settleLimited(tasks, concurrency);
+  const sourceResults = loads
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+  const sourceErrors = loads
+    .filter((result) => result.status === 'rejected')
+    .map((result) => result.reason?.message || '实时供应商覆盖探测失败。');
+
+  return buildSupplierCoverageSummary({
+    status,
+    cities,
+    sourceResults,
+    sourceErrors,
+    requestCount: tasks.length,
+    probeLimit,
+    concurrency,
+    generatedMs: Date.now() - startedAt,
+    query: buildSupplierCoverageQuery(params, destination)
+  });
 }
 
 async function readSupplierApiSourceLoads(source, params) {
@@ -141,6 +207,139 @@ function getSupplierFanoutCities(source, params) {
     : [];
   if (!cities.length) return [];
   return source.cityFanoutLimit > 0 ? cities.slice(0, source.cityFanoutLimit) : cities;
+}
+
+function getSupplierCoverageCities(destination, options = {}) {
+  const cities = destination.type === 'nationwide' || destination.type === 'province'
+    ? destination.cities
+    : destination.type === 'city'
+      ? [destination.city]
+      : [];
+  const cityLimit = getPositiveInteger(options.cityLimit, 0);
+  return cityLimit > 0 ? cities.slice(0, cityLimit) : cities;
+}
+
+function getSupplierCoverageProbeLimit(value) {
+  return getPositiveInteger(value ?? process.env.HOTEL_SUPPLIER_COVERAGE_PROBE_LIMIT, defaultSupplierCoverageProbeLimit);
+}
+
+function getSupplierCoverageProbeConcurrency(value) {
+  return Math.min(
+    getPositiveInteger(value ?? process.env.HOTEL_SUPPLIER_COVERAGE_PROBE_CONCURRENCY, defaultSupplierCoverageProbeConcurrency),
+    maxSupplierCoverageProbeConcurrency
+  );
+}
+
+function buildSupplierCoverageQuery(params, destination) {
+  return {
+    destinationType: destination.type,
+    city: params.city || '',
+    label: destination.label,
+    checkIn: params.checkIn,
+    checkOut: params.checkOut,
+    adults: params.adults,
+    rooms: params.rooms,
+    keyword: params.keyword || ''
+  };
+}
+
+function buildSupplierCoverageSummary({
+  status,
+  cities,
+  sourceResults,
+  sourceErrors,
+  requestCount,
+  probeLimit,
+  concurrency,
+  generatedMs,
+  query
+}) {
+  const resultsByCity = new Map();
+  const resultsBySource = new Map();
+  sourceResults.forEach((result) => {
+    const cityResults = resultsByCity.get(result.city) || [];
+    resultsByCity.set(result.city, [...cityResults, result]);
+    const sourceResultsForName = resultsBySource.get(result.sourceName) || [];
+    resultsBySource.set(result.sourceName, [...sourceResultsForName, result]);
+  });
+
+  const cityCoverage = cities.map(({ province, city }) => {
+    const results = resultsByCity.get(city) || [];
+    const coveredResults = results.filter((result) => result.hotelCount > 0);
+    const sources = coveredResults.map((result) => result.sourceName);
+    const rowCount = results.reduce((sum, result) => sum + result.rowCount, 0);
+    const hotelCount = results.reduce((sum, result) => sum + result.hotelCount, 0);
+    return {
+      province,
+      city,
+      covered: hotelCount > 0,
+      hotelCount,
+      rowCount,
+      sourceCount: unique(sources).length,
+      sources: unique(sources)
+    };
+  });
+  const coveredCities = cityCoverage.filter((item) => item.covered);
+  const sourceCoverage = [...resultsBySource.entries()].map(([sourceName, results]) => {
+    const citySet = new Set(results.filter((result) => result.hotelCount > 0).map((result) => result.city));
+    const coveredCityItems = cities.filter((city) => citySet.has(city.city));
+    return {
+      sourceName,
+      rowCount: results.reduce((sum, result) => sum + result.rowCount, 0),
+      hotelCount: results.reduce((sum, result) => sum + result.hotelCount, 0),
+      coveredCities: coveredCityItems.length,
+      totalCities: cities.length,
+      coverageRatio: cities.length ? Number((coveredCityItems.length / cities.length).toFixed(4)) : 0,
+      coveredProvinces: new Set(coveredCityItems.map((city) => city.province)).size,
+      totalProvinces: new Set(cities.map((city) => city.province)).size,
+      missingCities: cities
+        .filter((city) => !citySet.has(city.city))
+        .map(({ province, city }) => ({ province, city }))
+    };
+  }).sort((a, b) => b.coveredCities - a.coveredCities || b.hotelCount - a.hotelCount || a.sourceName.localeCompare(b.sourceName, 'zh-CN'));
+  const provinceCoverage = [...new Set(cities.map((city) => city.province))].map((province) => {
+    const provinceCities = cities.filter((city) => city.province === province);
+    const covered = provinceCities.filter((city) => cityCoverage.some((item) => item.city === city.city && item.covered));
+    return {
+      province,
+      coveredCities: covered.length,
+      totalCities: provinceCities.length,
+      coverageRatio: provinceCities.length ? Number((covered.length / provinceCities.length).toFixed(4)) : 0,
+      missingCities: provinceCities
+        .filter((city) => !covered.some((item) => item.city === city.city))
+        .map((city) => city.city)
+    };
+  });
+
+  return {
+    configured: status.configured,
+    type: 'supplier-api',
+    generatedAt: new Date().toISOString(),
+    generatedMs,
+    query,
+    apiCount: status.apiCount,
+    sourceCount: sourceCoverage.length,
+    requestCount,
+    completedRequestCount: sourceResults.length,
+    failedRequestCount: sourceErrors.length,
+    probeLimit,
+    concurrency,
+    sourceErrors,
+    rowCount: sourceResults.reduce((sum, result) => sum + result.rowCount, 0),
+    hotelCount: sourceResults.reduce((sum, result) => sum + result.hotelCount, 0),
+    coveredCities: coveredCities.length,
+    totalCities: cities.length,
+    coverageRatio: cities.length ? Number((coveredCities.length / cities.length).toFixed(4)) : 0,
+    coveredProvinces: new Set(coveredCities.map((item) => item.province)).size,
+    totalProvinces: new Set(cities.map((city) => city.province)).size,
+    cityCoverage,
+    missingCities: cityCoverage
+      .filter((item) => !item.covered)
+      .map(({ province, city }) => ({ province, city })),
+    sourceCoverage,
+    provinceCoverage,
+    catalogTotalCities: cityCatalog.length
+  };
 }
 
 async function settleLimited(tasks, concurrency) {
@@ -539,6 +738,19 @@ function mapSupplierRow(row, fieldMap = {}) {
     }
   });
   return mapped;
+}
+
+function mapSupplierRows(source, rows, fallbackCity = null) {
+  return rows.map((row) => {
+    const mapped = mapSupplierRow(row, source.fieldMap);
+    return {
+      ...mapped,
+      province: mapped.province || fallbackCity?.province,
+      city: mapped.city || fallbackCity?.city,
+      source: mapped.source || mapped.provider || mapped.supplier || mapped.providerName || source.name,
+      __inventoryFile: source.name
+    };
+  });
 }
 
 function getMappedValue(row, sourcePath) {

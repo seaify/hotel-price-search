@@ -161,6 +161,15 @@ npm start
 }
 ```
 
+接入实时供应商后，可用覆盖探测接口验收“全国/省份每城是否有真实可售”。接口会按城市发小请求，默认每城每供应商只取 1 条结果，并使用同一套字段映射、日期可售和城市归一化逻辑判断覆盖：
+
+```bash
+curl 'http://localhost:5174/api/supplier-coverage?checkIn=2026-06-06&checkOut=2026-06-07&probeLimit=1&concurrency=4'
+curl -OJ 'http://localhost:5174/api/supplier-coverage.csv?checkIn=2026-06-06&checkOut=2026-06-07'
+```
+
+也可以传 `city=江苏省` 探测单省，或用 `cityLimit=20` 先抽样。服务端环境变量 `HOTEL_SUPPLIER_COVERAGE_PROBE_LIMIT` 和 `HOTEL_SUPPLIER_COVERAGE_PROBE_CONCURRENCY` 可设置默认探测条数和并发数。
+
 CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[hotel-prices.partner.sample.csv](data/hotel-prices.partner.sample.csv) 和中文表头版 [hotel-prices.zh.sample.csv](data/hotel-prices.zh.sample.csv)。JSONL 可参考 [hotel-prices.jsonl.sample](data/hotel-prices.jsonl.sample)。嵌套 JSON 可参考 [hotel-prices.nested.sample.json](data/hotel-prices.nested.sample.json)，支持 `hotels/items/data/results/records/list` 作为酒店集合，也支持酒店下的 `rooms/roomTypes/roomList` 和房型下的 `rates/offers/prices` 多报价结构。核心字段是：
 
 ```text
@@ -230,6 +239,7 @@ npm start
 - Node 版和 GitHub Pages 静态版都支持远程供应商清单 manifest、多源自动重载和每源字段映射
 - `/api/status` 查看当前供应商接入状态
 - `/api/coverage` 查看真实库存全国覆盖率，包含逐城市覆盖、按供应商分组覆盖和缺口城市；可传 `checkIn` / `checkOut` 计算指定入住日期的可售覆盖；`/api/coverage?format=csv` 或 `/api/coverage.csv` 可下载逐城市覆盖/缺口清单，CSV 会标出覆盖该城市的供应商来源
+- `/api/supplier-coverage` 对已配置的实时供应商 API 做按城市可售探测；可传 `city`、`checkIn` / `checkOut`、`probeLimit`、`concurrency`、`cityLimit`，`/api/supplier-coverage.csv` 可下载实时供应商覆盖缺口表
 - `/api/imports` 查看或上传供应商文件
 
 ## 验证

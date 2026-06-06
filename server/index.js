@@ -20,6 +20,7 @@ import {
 } from './providers/local-inventory.js';
 import {
   getSupplierApiStatus,
+  probeSupplierApiCoverage,
   searchSupplierApiInventory
 } from './providers/supplier-api.js';
 
@@ -58,6 +59,15 @@ export function createHotelServer() {
         const coverage = await getLocalInventoryCoverage(null, getCoverageParams(url.searchParams));
         if (url.pathname.endsWith('.csv') || url.searchParams.get('format') === 'csv') {
           return sendCoverageCsv(response, coverage);
+        }
+        return sendJson(response, coverage);
+      }
+
+      if (url.pathname === '/api/supplier-coverage' || url.pathname === '/api/supplier-coverage.csv') {
+        const params = normalizeSearchParams(Object.fromEntries(url.searchParams.entries()));
+        const coverage = await probeSupplierApiCoverage(params, getSupplierCoverageOptions(url.searchParams));
+        if (url.pathname.endsWith('.csv') || url.searchParams.get('format') === 'csv') {
+          return sendCoverageCsv(response, coverage, 'hotel-supplier-coverage.csv');
         }
         return sendJson(response, coverage);
       }
@@ -430,6 +440,14 @@ function getCoverageParams(searchParams) {
   return checkIn && checkOut ? { checkIn, checkOut } : {};
 }
 
+function getSupplierCoverageOptions(searchParams) {
+  return {
+    probeLimit: searchParams.get('probeLimit') || searchParams.get('limit') || '',
+    concurrency: searchParams.get('concurrency') || '',
+    cityLimit: searchParams.get('cityLimit') || ''
+  };
+}
+
 async function serveStatic(pathname, response) {
   const requestPath = pathname === '/' ? '/index.html' : pathname;
   const safePath = normalize(decodeURIComponent(requestPath)).replace(/^[/\\]+/, '');
@@ -456,7 +474,7 @@ function sendJson(response, payload, status = 200) {
   response.end(JSON.stringify(payload));
 }
 
-function sendCoverageCsv(response, coverage) {
+function sendCoverageCsv(response, coverage, filename = 'hotel-coverage.csv') {
   const rows = [
     ['province', 'city', 'covered', 'hotelCount', 'rowCount', 'sourceCount', 'sources'],
     ...(coverage.cityCoverage || []).map((item) => [
@@ -470,7 +488,7 @@ function sendCoverageCsv(response, coverage) {
     ])
   ];
   const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
-  sendCsv(response, csv, 'hotel-coverage.csv');
+  sendCsv(response, csv, filename);
 }
 
 function sendCsv(response, csv, filename) {

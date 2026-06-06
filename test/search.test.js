@@ -593,6 +593,111 @@ describe('hotel search data', () => {
     }
   });
 
+  it('probes live supplier API coverage by city through the HTTP API', async () => {
+    const envKeys = [
+      'HOTEL_SUPPLIER_API_URL',
+      'HOTEL_SUPPLIER_API_URLS',
+      'HOTEL_SUPPLIER_API_CONFIG',
+      'HOTEL_SUPPLIER_API_NAME',
+      'HOTEL_SUPPLIER_API_NAMES',
+      'HOTEL_SUPPLIER_API_METHOD',
+      'HOTEL_SUPPLIER_API_HEADERS',
+      'HOTEL_SUPPLIER_COVERAGE_PROBE_LIMIT',
+      'HOTEL_SUPPLIER_COVERAGE_PROBE_CONCURRENCY',
+      'AMADEUS_CLIENT_ID',
+      'AMADEUS_CLIENT_SECRET'
+    ];
+    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    envKeys.forEach((key) => delete process.env[key]);
+
+    const requestedCities = [];
+    const requestedPageSizes = [];
+    const supplierServer = createHttpServer((request, response) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const city = url.searchParams.get('cityName');
+      requestedCities.push(city);
+      requestedPageSizes.push(url.searchParams.get('pageSize'));
+      const availableCities = new Set(['南京', '无锡']);
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        hotels: availableCities.has(city)
+          ? [
+              {
+                id: `coverage-probe-${city}`,
+                hotelName: `${city}实时覆盖酒店`,
+                province: '江苏省',
+                city: `${city}市`,
+                price: city === '南京' ? 560 : 460,
+                source: '覆盖探测供应商',
+                checkIn: '2026-06-01',
+                checkOut: '2026-12-31',
+                available: true
+              }
+            ]
+          : []
+      }));
+    });
+    await new Promise((resolve) => supplierServer.listen(0, resolve));
+    const supplierAddress = supplierServer.address();
+    process.env.HOTEL_SUPPLIER_API_CONFIG = JSON.stringify({
+      name: '覆盖探测供应商',
+      url: `http://127.0.0.1:${supplierAddress.port}/probe`,
+      method: 'GET',
+      requestMap: {
+        cityName: 'city',
+        pageSize: 'limit'
+      }
+    });
+
+    const server = createHotelServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const coverageResponse = await fetch(`${baseUrl}/api/supplier-coverage?city=江苏省&checkIn=2026-06-06&checkOut=2026-06-07&cityLimit=3&probeLimit=1&concurrency=1`);
+      const coverage = await coverageResponse.json();
+      assert.equal(coverageResponse.status, 200);
+      assert.equal(coverage.configured, true);
+      assert.equal(coverage.query.destinationType, 'province');
+      assert.equal(coverage.query.label, '江苏');
+      assert.equal(coverage.totalCities, 3);
+      assert.equal(coverage.coveredCities, 2);
+      assert.equal(coverage.requestCount, 3);
+      assert.equal(coverage.completedRequestCount, 3);
+      assert.equal(coverage.failedRequestCount, 0);
+      assert.equal(coverage.probeLimit, 1);
+      assert.equal(coverage.concurrency, 1);
+      assert.deepEqual(requestedCities, ['南京', '无锡', '徐州']);
+      assert.deepEqual(requestedPageSizes, ['1', '1', '1']);
+      assert.ok(coverage.cityCoverage.some((item) => item.city === '南京' && item.covered && item.sources.includes('覆盖探测供应商')));
+      assert.ok(coverage.cityCoverage.some((item) => item.city === '无锡' && item.covered));
+      assert.ok(coverage.cityCoverage.some((item) => item.city === '徐州' && !item.covered));
+      assert.ok(coverage.missingCities.some((item) => item.province === '江苏' && item.city === '徐州'));
+      assert.equal(coverage.sourceCoverage[0].sourceName, '覆盖探测供应商');
+      assert.equal(coverage.sourceCoverage[0].coveredCities, 2);
+      assert.equal(coverage.sourceCoverage[0].hotelCount, 2);
+
+      const csvResponse = await fetch(`${baseUrl}/api/supplier-coverage.csv?city=江苏省&checkIn=2026-06-06&checkOut=2026-06-07&cityLimit=3&probeLimit=1&concurrency=1`);
+      const csv = await csvResponse.text();
+      assert.equal(csvResponse.status, 200);
+      assert.match(csvResponse.headers.get('content-type'), /text\/csv/);
+      assert.match(csvResponse.headers.get('content-disposition'), /hotel-supplier-coverage\.csv/);
+      assert.match(csv, /江苏,南京,yes,1,1,1,覆盖探测供应商/);
+      assert.match(csv, /江苏,徐州,no,0,0,0,/);
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await new Promise((resolve, reject) => supplierServer.close((error) => error ? reject(error) : resolve()));
+      Object.entries(previousEnv).forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+    }
+  });
+
   it('refreshes cached local inventory when the supplier file changes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-refresh-'));
     const filePath = join(dir, 'prices.json');
