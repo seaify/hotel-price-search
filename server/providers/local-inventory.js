@@ -1,7 +1,14 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { applyFilters, cityCatalog, findCity, getNightCount } from '../hotel-data.js';
+import {
+  applyFilters,
+  cityCatalog,
+  findCity,
+  findProvince,
+  getNightCount,
+  normalizeDestinationInput
+} from '../hotel-data.js';
 
 const defaultImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80';
 const maxImportBytes = 8 * 1024 * 1024;
@@ -564,13 +571,37 @@ function formatBytes(bytes) {
   return `${Math.round(bytes / 1024 / 1024)}MB`;
 }
 
+function normalizeInventoryLocation(cityValue, provinceValue) {
+  const rawCity = String(cityValue || '').trim();
+  const rawProvince = String(provinceValue || '').trim();
+  const explicitProvince = findProvince(rawProvince) || findProvince(rawCity) || '';
+  const exactCity = findExactInventoryCity(rawCity);
+  const embeddedCity = exactCity || findEmbeddedCity(rawCity);
+  const city = embeddedCity?.city || normalizeDestinationInput(rawCity);
+  const province = explicitProvince || embeddedCity?.province || '';
+
+  return {
+    city: findProvince(city) && !embeddedCity ? '' : city,
+    province
+  };
+}
+
+function findEmbeddedCity(value) {
+  const normalized = normalizeDestinationInput(value);
+  if (!normalized || findProvince(normalized)) return null;
+  return cityCatalog.find((item) => normalized.includes(item.city)) || null;
+}
+
+function findExactInventoryCity(value) {
+  const normalized = normalizeDestinationInput(value);
+  return cityCatalog.find((item) => item.city === normalized) || null;
+}
+
 function normalizeHotel(row, index, nights) {
   const price = parseMoney(pick(row, 'price'));
   const totalPrice = parseMoney(pick(row, 'totalPrice')) || price * nights;
   const star = Number(pick(row, 'star') || 0) || null;
-  const destination = pick(row, 'city');
-  const city = findCity(destination)?.city || destination || '';
-  const knownCity = findCity(city);
+  const location = normalizeInventoryLocation(pick(row, 'city'), pick(row, 'province'));
   const amenities = splitList(pick(row, 'amenities'));
   const tags = splitList(pick(row, 'tags'));
   const providerName = pick(row, 'providerName') || basename(row.__inventoryFile || '本地供应商文件');
@@ -579,8 +610,8 @@ function normalizeHotel(row, index, nights) {
   return {
     id: pick(row, 'id') || `local-${index}`,
     name: pick(row, 'name') || '未命名酒店',
-    city,
-    province: pick(row, 'province') || knownCity?.province || '',
+    city: location.city,
+    province: location.province,
     district: pick(row, 'district') || '',
     address: pick(row, 'address') || '',
     star,
@@ -716,8 +747,15 @@ function unique(values) {
 
 function filterByDestination(hotels, params) {
   if (!params.city) return hotels;
-  const city = findCity(params.city)?.city || params.city;
-  return hotels.filter((hotel) => hotel.city === city || hotel.province === city);
+  const city = findCity(params.city)?.city || '';
+  const province = findProvince(params.city) || '';
+  const normalized = normalizeDestinationInput(params.city);
+  return hotels.filter((hotel) =>
+    (city && hotel.city === city) ||
+    (province && hotel.province === province) ||
+    hotel.city === normalized ||
+    hotel.province === normalized
+  );
 }
 
 function isAvailableForDates(hotel, params) {

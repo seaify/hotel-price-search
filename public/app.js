@@ -637,16 +637,14 @@ function buildStaticDemoHotels(city, params) {
 function normalizeStaticHotel(row, index, nights) {
   const price = parseStaticMoney(pickStatic(row, 'price'));
   const totalPrice = parseStaticMoney(pickStatic(row, 'totalPrice')) || price * nights;
-  const destination = pickStatic(row, 'city');
-  const city = findStaticCity(destination)?.city || destination || '';
-  const knownCity = findStaticCity(city);
+  const location = normalizeStaticInventoryLocation(pickStatic(row, 'city'), pickStatic(row, 'province'));
   const providerName = pickStatic(row, 'providerName') || row.__inventoryFile || '浏览器导入';
   const roomName = pickStatic(row, 'roomName') || '供应商库存';
   return {
     id: pickStatic(row, 'id') || `static-${index}`,
     name: pickStatic(row, 'name') || '未命名酒店',
-    city,
-    province: pickStatic(row, 'province') || knownCity?.province || '',
+    city: location.city,
+    province: location.province,
     district: pickStatic(row, 'district') || '',
     address: pickStatic(row, 'address') || '',
     star: Number(pickStatic(row, 'star') || 0) || null,
@@ -764,6 +762,27 @@ function findStaticProvince(input) {
   const normalized = normalizeStaticDestinationInput(input);
   return [...new Set(getStaticCities().map((item) => item.province))]
     .find((province) => province === normalized) || null;
+}
+
+function normalizeStaticInventoryLocation(cityValue, provinceValue) {
+  const rawCity = String(cityValue || '').trim();
+  const rawProvince = String(provinceValue || '').trim();
+  const explicitProvince = findStaticProvince(rawProvince) || findStaticProvince(rawCity) || '';
+  const exactCity = findExactStaticCity(rawCity);
+  const embeddedCity = exactCity || findEmbeddedStaticCity(rawCity);
+  const city = embeddedCity?.city || normalizeStaticDestinationInput(rawCity);
+  const province = explicitProvince || embeddedCity?.province || '';
+
+  return {
+    city: findStaticProvince(city) && !embeddedCity ? '' : city,
+    province
+  };
+}
+
+function findEmbeddedStaticCity(value) {
+  const normalized = normalizeStaticDestinationInput(value);
+  if (!normalized || findStaticProvince(normalized)) return null;
+  return getStaticCities().find((item) => normalized.includes(item.city)) || null;
 }
 
 function resolveStaticDestination(input) {

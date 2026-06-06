@@ -49,6 +49,8 @@ CSV 字段可参考 [hotel-prices.sample.csv](data/hotel-prices.sample.csv)、[h
 id,name,province,city,district,address,star,rating,reviews,price,currency,amenities,tags,payment,cancellation,source,checkIn,checkOut,available,bookingUrl
 ```
 
+省市字段会自动规范化，供应商文件里的 `广东省`、`深圳市`、`广西壮族自治区`、`广东省深圳市` 等写法会统一归并到内部的省份/城市名称，便于省级查询和覆盖率统计。
+
 也识别常见中文表头，例如：
 
 ```text

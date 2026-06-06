@@ -296,6 +296,117 @@ describe('hotel search data', () => {
     }
   });
 
+  it('normalizes administrative suffixes in supplier province and city fields', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-admin-normalize-'));
+    const filePath = join(dir, 'admin.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(filePath, JSON.stringify([
+      {
+        id: 'admin-gd-001',
+        name: '深圳行政全称供应商酒店',
+        province: '广东省',
+        city: '深圳市',
+        price: 720,
+        source: '行政区供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'admin-gd-002',
+        name: '广州合并行政供应商酒店',
+        city: '广东省广州市',
+        price: 620,
+        source: '行政区供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'admin-gx-001',
+        name: '南宁自治区供应商酒店',
+        province: '广西壮族自治区',
+        city: '南宁市',
+        price: 520,
+        source: '行政区供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'admin-hi-001',
+        name: '海南省字段供应商酒店',
+        province: '海南省',
+        city: '海南省',
+        price: 500,
+        source: '行政区供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      }
+    ]));
+
+    process.env.HOTEL_DATA_FILE = filePath;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    clearInventoryCache();
+
+    try {
+      const guangdong = await searchHotels({
+        city: '广东省',
+        keyword: '行政',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(guangdong.source, 'local');
+      assert.equal(guangdong.total, 2);
+      assert.ok(guangdong.hotels.every((hotel) => hotel.province === '广东'));
+      assert.ok(guangdong.hotels.some((hotel) => hotel.city === '深圳'));
+      assert.ok(guangdong.hotels.some((hotel) => hotel.city === '广州'));
+
+      const guangxi = await searchHotels({
+        city: '广西',
+        keyword: '自治区',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(guangxi.total, 1);
+      assert.equal(guangxi.hotels[0].province, '广西');
+      assert.equal(guangxi.hotels[0].city, '南宁');
+
+      const hainan = await searchHotels({
+        city: '海南省',
+        keyword: '字段',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+      assert.equal(hainan.total, 1);
+      assert.equal(hainan.hotels[0].province, '海南');
+      assert.equal(hainan.hotels[0].city, '');
+    } finally {
+      clearInventoryCache();
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reports real inventory city coverage through the HTTP API', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-coverage-'));
     const filePath = join(dir, 'coverage.json');
