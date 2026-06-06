@@ -53,6 +53,24 @@ describe('supplier inventory env publisher config', () => {
     ]);
   });
 
+  it('loads workflow-dispatch JSON arrays from the plain input field', () => {
+    const options = buildPublishSupplierInventoryOptions({
+      HOTEL_SUPPLIER_INVENTORY_INPUTS: JSON.stringify([
+        'https://supplier.example.com/one.csv?signature=a,b',
+        'https://supplier.example.com/two.jsonl?signature=c;d'
+      ]),
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_URL: 'https://supplier.example.com/sources.json',
+      HOTEL_SUPPLIER_FIELD_MAP_JSON: '{"price":"rate.salePrice"}'
+    }, '/repo');
+
+    assert.deepEqual(options.inputFiles, [
+      'https://supplier.example.com/one.csv?signature=a,b',
+      'https://supplier.example.com/two.jsonl?signature=c;d'
+    ]);
+    assert.equal(options.sourceManifest, 'https://supplier.example.com/sources.json');
+    assert.equal(options.fieldMap, '{"price":"rate.salePrice"}');
+  });
+
   it('requires at least one configured supplier inventory input', () => {
     assert.throws(
       () => buildPublishSupplierInventoryOptions({}, '/repo'),

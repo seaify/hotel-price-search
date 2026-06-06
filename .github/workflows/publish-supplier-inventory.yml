@@ -3,12 +3,40 @@ name: Publish supplier inventory
 on:
   workflow_dispatch:
     inputs:
+      supplier_inventory_inputs:
+        description: Optional public or signed supplier export URL(s), one per line or JSON array
+        required: false
+        type: string
+      supplier_source_manifest_url:
+        description: Optional public or signed multi-source supplier manifest URL
+        required: false
+        type: string
+      supplier_field_map_json:
+        description: Optional JSON field map for non-standard supplier export fields
+        required: false
+        type: string
       check_in:
         description: Optional stay check-in date for coverage gating, such as 2026-06-06
         required: false
         type: string
       check_out:
         description: Optional stay check-out date for coverage gating, such as 2026-06-07
+        required: false
+        type: string
+      min_hotels_per_city:
+        description: Optional minimum hotels required in every catalog city
+        required: false
+        type: string
+      min_priced_hotels_per_city:
+        description: Optional minimum priced hotels required in every catalog city
+        required: false
+        type: string
+      min_total_hotels:
+        description: Optional minimum total hotels required nationwide
+        required: false
+        type: string
+      min_total_priced_rows:
+        description: Optional minimum total priced rows required nationwide
         required: false
         type: string
   schedule:
@@ -26,25 +54,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON }}
-      HOTEL_SUPPLIER_INVENTORY_INPUTS: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUTS }}
+      HOTEL_SUPPLIER_INVENTORY_INPUTS: ${{ github.event.inputs.supplier_inventory_inputs || secrets.HOTEL_SUPPLIER_INVENTORY_INPUTS }}
       HOTEL_SUPPLIER_INVENTORY_INPUT: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_INPUT }}
       HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_HEADERS_JSON }}
       HOTEL_SUPPLIER_INVENTORY_HEADERS: ${{ secrets.HOTEL_SUPPLIER_INVENTORY_HEADERS }}
       HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON }}
-      HOTEL_SUPPLIER_SOURCE_MANIFEST_URL: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL }}
+      HOTEL_SUPPLIER_SOURCE_MANIFEST_URL: ${{ github.event.inputs.supplier_source_manifest_url || secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL }}
       HOTEL_SUPPLIER_SOURCE_MANIFEST: ${{ secrets.HOTEL_SUPPLIER_SOURCE_MANIFEST }}
-      HOTEL_SUPPLIER_FIELD_MAP_JSON: ${{ secrets.HOTEL_SUPPLIER_FIELD_MAP_JSON }}
+      HOTEL_SUPPLIER_FIELD_MAP_JSON: ${{ github.event.inputs.supplier_field_map_json || secrets.HOTEL_SUPPLIER_FIELD_MAP_JSON }}
       HOTEL_SUPPLIER_FIELD_MAP: ${{ secrets.HOTEL_SUPPLIER_FIELD_MAP }}
       HOTEL_SUPPLIER_CHECK_IN: ${{ github.event.inputs.check_in || vars.HOTEL_SUPPLIER_CHECK_IN || '' }}
       HOTEL_SUPPLIER_CHECK_OUT: ${{ github.event.inputs.check_out || vars.HOTEL_SUPPLIER_CHECK_OUT || '' }}
-      HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY: ${{ vars.HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY || '1' }}
+      HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY: ${{ github.event.inputs.min_hotels_per_city || vars.HOTEL_SUPPLIER_MIN_HOTELS_PER_CITY || '1' }}
       HOTEL_SUPPLIER_MIN_ROWS_PER_CITY: ${{ vars.HOTEL_SUPPLIER_MIN_ROWS_PER_CITY || '1' }}
-      HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY: ${{ vars.HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY || '1' }}
+      HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY: ${{ github.event.inputs.min_priced_hotels_per_city || vars.HOTEL_SUPPLIER_MIN_PRICED_HOTELS_PER_CITY || '1' }}
       HOTEL_SUPPLIER_MIN_PRICED_ROWS_PER_CITY: ${{ vars.HOTEL_SUPPLIER_MIN_PRICED_ROWS_PER_CITY || '1' }}
-      HOTEL_SUPPLIER_MIN_TOTAL_HOTELS: ${{ vars.HOTEL_SUPPLIER_MIN_TOTAL_HOTELS || '' }}
+      HOTEL_SUPPLIER_MIN_TOTAL_HOTELS: ${{ github.event.inputs.min_total_hotels || vars.HOTEL_SUPPLIER_MIN_TOTAL_HOTELS || '' }}
       HOTEL_SUPPLIER_MIN_TOTAL_ROWS: ${{ vars.HOTEL_SUPPLIER_MIN_TOTAL_ROWS || '' }}
       HOTEL_SUPPLIER_MIN_TOTAL_PRICED_HOTELS: ${{ vars.HOTEL_SUPPLIER_MIN_TOTAL_PRICED_HOTELS || '' }}
-      HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS: ${{ vars.HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS || '' }}
+      HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS: ${{ github.event.inputs.min_total_priced_rows || vars.HOTEL_SUPPLIER_MIN_TOTAL_PRICED_ROWS || '' }}
       HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS: ${{ vars.HOTEL_SUPPLIER_MAX_PRICE_AGE_HOURS || '' }}
       HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME: ${{ vars.HOTEL_SUPPLIER_FRESHNESS_REFERENCE_TIME || '' }}
       HOTEL_SUPPLIER_INVENTORY_BASE_URL: ${{ vars.HOTEL_SUPPLIER_INVENTORY_BASE_URL || '' }}
@@ -61,7 +89,7 @@ jobs:
         id: config
         run: |
           if [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUTS" ] && [ -z "$HOTEL_SUPPLIER_INVENTORY_INPUT" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST_URL" ] && [ -z "$HOTEL_SUPPLIER_SOURCE_MANIFEST" ]; then
-            echo "::notice title=Supplier inventory not configured::Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON or HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON in repository secrets."
+            echo "::notice title=Supplier inventory not configured::Set supplier_inventory_inputs or supplier_source_manifest_url when manually running this workflow, or configure HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON / HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON in repository secrets."
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"

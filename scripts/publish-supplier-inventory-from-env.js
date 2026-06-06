@@ -6,7 +6,7 @@ export function buildPublishSupplierInventoryOptions(env = process.env, cwd = pr
   const inputFiles = getInputFiles(env);
   const sourceManifest = firstNonEmpty(env.HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON, env.HOTEL_SUPPLIER_SOURCE_MANIFEST_URL, env.HOTEL_SUPPLIER_SOURCE_MANIFEST, '');
   if (!inputFiles.length && !sourceManifest) {
-    throw new Error('Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, HOTEL_SUPPLIER_INVENTORY_INPUTS, HOTEL_SUPPLIER_INVENTORY_INPUT, or HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON before publishing supplier inventory.');
+    throw new Error('Set HOTEL_SUPPLIER_INVENTORY_INPUTS_JSON, HOTEL_SUPPLIER_INVENTORY_INPUTS, HOTEL_SUPPLIER_INVENTORY_INPUT, HOTEL_SUPPLIER_SOURCE_MANIFEST_JSON, or HOTEL_SUPPLIER_SOURCE_MANIFEST_URL before publishing supplier inventory.');
   }
 
   const options = {
