@@ -297,6 +297,117 @@ describe('hotel search data', () => {
     }
   });
 
+  it('expands nested hotel rooms and rates from supplier JSON files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-nested-'));
+    const filePath = join(dir, 'nested.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(filePath, JSON.stringify({
+      provider: '嵌套供应商',
+      hotels: [
+        {
+          id: 'nested-001',
+          hotelName: '成都嵌套报价酒店',
+          province: '四川',
+          city: '成都',
+          district: '锦江',
+          address: '成都市锦江区春熙路 88 号',
+          star: 5,
+          rating: 4.8,
+          amenities: ['泳池', '免费 Wi-Fi'],
+          tags: ['真实库存', '春熙路'],
+          rooms: [
+            {
+              roomName: '高级大床房',
+              amenities: ['浴缸'],
+              rates: [
+                {
+                  rateName: '含早可取消',
+                  price: 760,
+                  originalPrice: 920,
+                  checkIn: '2026-06-01',
+                  checkOut: '2026-12-31',
+                  available: true,
+                  payment: '在线付',
+                  cancellation: '限时免费取消',
+                  bookingUrl: 'https://example.com/nested-001-breakfast'
+                },
+                {
+                  rateName: '不含早',
+                  price: 680,
+                  checkIn: '2026-06-01',
+                  checkOut: '2026-12-31',
+                  available: true,
+                  payment: '到店付',
+                  cancellation: '预订前确认',
+                  bookingUrl: 'https://example.com/nested-001-room-only'
+                }
+              ]
+            },
+            {
+              roomName: '行政套房',
+              offers: [
+                {
+                  rateName: '双早礼遇',
+                  price: 1280,
+                  checkIn: '2026-06-01',
+                  checkOut: '2026-12-31',
+                  available: true,
+                  bookingUrl: 'https://example.com/nested-001-suite'
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }));
+
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    process.env.HOTEL_DATA_FILE = filePath;
+    clearInventoryCache();
+
+    try {
+      const result = await searchHotels({
+        city: '成都',
+        keyword: '嵌套报价',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.total, 1);
+      assert.equal(result.hotels[0].name, '成都嵌套报价酒店');
+      assert.equal(result.hotels[0].price, 680);
+      assert.equal(result.hotels[0].offerCount, 3);
+      assert.equal(result.hotels[0].rates[0].roomName, '高级大床房 · 不含早');
+      assert.equal(result.hotels[0].rates[2].roomName, '行政套房 · 双早礼遇');
+      assert.ok(result.hotels[0].amenities.includes('泳池'));
+      assert.ok(result.hotels[0].amenities.includes('浴缸'));
+      assert.equal(result.hotels[0].bookingUrl, 'https://example.com/nested-001-room-only');
+    } finally {
+      clearInventoryCache();
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('imports a supplier file through the HTTP API and makes it searchable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-upload-'));
     const previousFile = process.env.HOTEL_DATA_FILE;

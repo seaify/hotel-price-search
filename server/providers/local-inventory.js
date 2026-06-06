@@ -10,9 +10,13 @@ const defaultInventoryCacheSeconds = 60;
 const allowedExtensions = new Set(['.csv', '.json']);
 const sensitiveQueryPattern = /(token|key|secret|signature|sign|auth|access|password)/i;
 const inventoryCache = new Map();
+const inventoryCollectionKeys = ['hotels', 'items', 'data', 'results', 'records', 'list', '酒店列表', '酒店'];
+const nestedRoomKeys = ['rooms', 'roomTypes', 'roomList', '房型', '房型列表', '房间'];
+const nestedRateKeys = ['rates', 'offers', 'prices', 'roomRates', 'plans', 'products', '报价', '报价列表', '价格', '价格列表', '价格计划'];
+const nestedCollectionKeys = new Set([...inventoryCollectionKeys, ...nestedRoomKeys, ...nestedRateKeys]);
 const fieldAliases = {
   id: ['id', 'hotelId', 'hotel_id', '酒店ID', '酒店编号', '供应商酒店ID'],
-  name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '名称'],
+  name: ['name', 'hotelName', 'hotel_name', '酒店名称', '酒店名', '酒店', '名称'],
   province: ['province', '省份', '省', '地区省份'],
   city: ['city', 'destination', '目的地', '城市', '市'],
   district: ['district', 'businessDistrict', 'business_district', '行政区', '区县', '区域', '商圈'],
@@ -208,7 +212,7 @@ export async function searchLocalInventory(params) {
 export function parseInventory(raw, extension = '.json') {
   if (extension === '.csv') return parseCsv(raw);
   const parsed = JSON.parse(raw);
-  return Array.isArray(parsed) ? parsed : parsed.hotels || [];
+  return flattenInventoryDocument(parsed);
 }
 
 function sanitizeImportFilename(filename) {
@@ -223,6 +227,112 @@ function sanitizeImportFilename(filename) {
 
 function getImportDir() {
   return resolve(process.env.HOTEL_IMPORT_DIR || 'data/imports');
+}
+
+function flattenInventoryDocument(parsed) {
+  const records = getInventoryRecords(parsed);
+  return records.flatMap(flattenInventoryRecord);
+}
+
+function getInventoryRecords(value, inherited = {}) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({ ...inherited, ...item }));
+  }
+
+  if (!value || typeof value !== 'object') return [];
+  const rootFields = { ...inherited, ...stripNestedCollections(value) };
+
+  for (const key of inventoryCollectionKeys) {
+    const nested = value[key];
+    if (Array.isArray(nested)) return getInventoryRecords(nested, rootFields);
+    if (nested && typeof nested === 'object') {
+      const nestedRecords = getInventoryRecords(nested, rootFields);
+      if (nestedRecords.length) return nestedRecords;
+    }
+  }
+
+  return [{ ...inherited, ...value }];
+}
+
+function flattenInventoryRecord(record) {
+  if (!record || typeof record !== 'object') return [];
+  const rooms = getFirstArray(record, nestedRoomKeys);
+  const directRates = getFirstArray(record, nestedRateKeys);
+
+  if (rooms.length) {
+    const rows = rooms.flatMap((room) => {
+      if (!room || typeof room !== 'object') return [];
+      const roomRates = getFirstArray(room, nestedRateKeys);
+      if (roomRates.length) {
+        return roomRates.map((rate) => mergeInventoryParts(record, room, rate));
+      }
+      return [mergeInventoryParts(record, room, null)];
+    });
+    if (rows.length) return rows;
+  }
+
+  if (directRates.length) {
+    return directRates.map((rate) => mergeInventoryParts(record, null, rate));
+  }
+
+  return [stripNestedCollections(record)];
+}
+
+function mergeInventoryParts(hotel, room, rate) {
+  const hotelFields = stripNestedCollections(hotel || {});
+  const roomFields = stripNestedCollections(room || {});
+  const rateFields = stripNestedCollections(rate || {});
+  const row = { ...hotelFields, ...roomFields, ...rateFields };
+  const roomName = pickFromParts([roomFields], 'roomName') || pickFromParts([roomFields], 'name');
+  const rateName = pickFromParts([rateFields], 'roomName') || pickFromParts([rateFields], 'name');
+
+  row.id = pickFromParts([hotelFields, row], 'id') || row.id;
+  row.name = pickFromParts([hotelFields, row], 'name') || row.name;
+  row.roomName = formatRoomRateName(roomName, rateName) || row.roomName;
+  row.amenities = unique([
+    ...splitList(pickFromParts([hotelFields], 'amenities')),
+    ...splitList(pickFromParts([roomFields], 'amenities')),
+    ...splitList(pickFromParts([rateFields], 'amenities'))
+  ]);
+  row.tags = unique([
+    ...splitList(pickFromParts([hotelFields], 'tags')),
+    ...splitList(pickFromParts([roomFields], 'tags')),
+    ...splitList(pickFromParts([rateFields], 'tags'))
+  ]);
+
+  return row;
+}
+
+function stripNestedCollections(value) {
+  return Object.fromEntries(
+    Object.entries(value || {}).filter(([key, item]) => {
+      const nestedValue = item && typeof item === 'object';
+      return !nestedCollectionKeys.has(key) || !nestedValue;
+    })
+  );
+}
+
+function getFirstArray(value, keys) {
+  for (const key of keys) {
+    if (Array.isArray(value?.[key])) return value[key];
+  }
+  return [];
+}
+
+function pickFromParts(parts, field) {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const value = pick(part, field);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function formatRoomRateName(roomName, rateName) {
+  if (roomName && rateName && roomName !== rateName) return `${roomName} · ${rateName}`;
+  return rateName || roomName || '';
 }
 
 async function readInventoryFile(file) {
