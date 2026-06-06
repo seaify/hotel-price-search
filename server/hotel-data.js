@@ -103,12 +103,84 @@ const imagePool = [
 
 export function findCity(input) {
   if (!input) return null;
-  const normalized = input.trim().replace(/市$/, '');
+  const normalized = normalizeDestinationInput(input);
   return (
     cityCatalog.find((item) => item.city === normalized) ||
-    cityCatalog.find((item) => item.city.includes(normalized)) ||
-    cityCatalog.find((item) => item.province === normalized)
+    cityCatalog.find((item) => item.city.includes(normalized))
   );
+}
+
+export function findProvince(input) {
+  if (!input) return null;
+  const normalized = normalizeDestinationInput(input);
+  return Object.keys(provinceCities).find((province) => province === normalized) || null;
+}
+
+export function resolveDestination(input) {
+  const normalized = normalizeDestinationInput(input);
+  if (!normalized) {
+    return {
+      type: 'nationwide',
+      label: '全国',
+      cities: cityCatalog
+    };
+  }
+
+  const exactCity = findExactCity(normalized);
+  const province = findProvince(normalized);
+  if (province && (isProvinceIntent(input) || !exactCity)) {
+    return {
+      type: 'province',
+      label: province,
+      province,
+      cities: cityCatalog.filter((item) => item.province === province)
+    };
+  }
+
+  const city = exactCity || findCity(normalized);
+  if (city) {
+    return {
+      type: 'city',
+      label: city.city,
+      city,
+      cities: [city]
+    };
+  }
+
+  if (province) {
+    return {
+      type: 'province',
+      label: province,
+      province,
+      cities: cityCatalog.filter((item) => item.province === province)
+    };
+  }
+
+  return {
+    type: 'unknown',
+    label: normalized,
+    cities: []
+  };
+}
+
+export function normalizeDestinationInput(input) {
+  return String(input || '')
+    .trim()
+    .replace(/特别行政区$/, '')
+    .replace(/维吾尔自治区$/, '')
+    .replace(/壮族自治区$/, '')
+    .replace(/回族自治区$/, '')
+    .replace(/自治区$/, '')
+    .replace(/[省市]$/, '');
+}
+
+function findExactCity(input) {
+  const normalized = normalizeDestinationInput(input);
+  return cityCatalog.find((item) => item.city === normalized) || null;
+}
+
+function isProvinceIntent(input) {
+  return /(?:省|自治区|特别行政区)$/.test(String(input || '').trim());
 }
 
 export function buildDemoHotels(params = {}) {

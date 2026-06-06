@@ -8,6 +8,7 @@ import {
   cityCatalog,
   findCity,
   getNightCount,
+  resolveDestination,
   summarizeCities
 } from './hotel-data.js';
 import {
@@ -123,7 +124,7 @@ export async function searchHotels(params) {
     inventoryFailureNotice = errorNotice ? `${errorNotice} 当前已回退到备用数据源。` : '';
   }
 
-  if (providerEnabled && normalized.city) {
+  if (providerEnabled && normalized.destinationType === 'city') {
     try {
       const liveResults = await searchAmadeus(normalized);
       if (liveResults.hotels.length > 0) {
@@ -150,9 +151,7 @@ export async function searchHotels(params) {
     }
   }
 
-  const hotels = normalized.city
-    ? buildDemoHotels(normalized)
-    : searchNationwideDemo(normalized);
+  const hotels = searchDemoInventory(normalized);
   const page = paginateHotels(hotels, normalized);
   const providers = await getProviderStatus();
   if (inventoryFallbackStatus) providers.localInventory = inventoryFallbackStatus;
@@ -195,10 +194,16 @@ function normalizeSearchParams(params) {
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
   const checkIn = params.checkIn || toDateInput(today);
   const checkOut = params.checkOut || toDateInput(tomorrow);
-  const city = findCity(params.city)?.city || params.city || '';
+  const destination = resolveDestination(params.city);
+  const city = destination.type === 'nationwide'
+    ? ''
+    : destination.type === 'unknown'
+      ? params.city || ''
+      : destination.label;
 
   return {
     city,
+    destinationType: destination.type,
     keyword: params.keyword || '',
     checkIn,
     checkOut,
@@ -213,8 +218,11 @@ function normalizeSearchParams(params) {
   };
 }
 
-function searchNationwideDemo(params) {
-  const batch = cityCatalog.flatMap((city) => buildDemoHotels({ ...params, city: city.city }));
+function searchDemoInventory(params) {
+  const destination = resolveDestination(params.city);
+  if (destination.type === 'unknown') return [];
+  const cities = destination.type === 'city' ? [destination.city] : destination.cities;
+  const batch = cities.flatMap((city) => buildDemoHotels({ ...params, city: city.city }));
   return applyFilters(batch, params);
 }
 

@@ -81,6 +81,75 @@ describe('hotel search data', () => {
     assert.ok(firstPage.coverageCities >= 300);
   });
 
+  it('returns province-wide demo results for province destinations', async () => {
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.AMADEUS_CLIENT_ID;
+    delete process.env.AMADEUS_CLIENT_SECRET;
+
+    const result = await searchHotels({
+      city: '广东省',
+      checkIn: '2026-06-06',
+      checkOut: '2026-06-07',
+      limit: '100'
+    });
+
+    assert.equal(result.source, 'demo');
+    assert.equal(result.query.city, '广东');
+    assert.equal(result.query.destinationType, 'province');
+    assert.equal(result.coverageCities, 21);
+    assert.equal(result.total, 21 * 14);
+    assert.ok(result.hotels.every((hotel) => hotel.province === '广东'));
+    assert.ok(result.hotels.some((hotel) => hotel.city === '深圳'));
+    assert.ok(result.hotels.some((hotel) => hotel.city === '广州'));
+  });
+
+  it('does not fall back to Beijing for unknown destinations', async () => {
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.AMADEUS_CLIENT_ID;
+    delete process.env.AMADEUS_CLIENT_SECRET;
+
+    const result = await searchHotels({
+      city: '不存在目的地',
+      checkIn: '2026-06-06',
+      checkOut: '2026-06-07'
+    });
+
+    assert.equal(result.source, 'demo');
+    assert.equal(result.query.destinationType, 'unknown');
+    assert.equal(result.total, 0);
+    assert.equal(result.hotels.length, 0);
+  });
+
+  it('prefers province intent for destinations with province suffixes', async () => {
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_URL;
+    delete process.env.HOTEL_DATA_URLS;
+    delete process.env.AMADEUS_CLIENT_ID;
+    delete process.env.AMADEUS_CLIENT_SECRET;
+
+    const result = await searchHotels({
+      city: '海南省',
+      checkIn: '2026-06-06',
+      checkOut: '2026-06-07',
+      limit: '100'
+    });
+
+    assert.equal(result.query.city, '海南');
+    assert.equal(result.query.destinationType, 'province');
+    assert.equal(result.coverageCities, 19);
+    assert.ok(result.hotels.every((hotel) => hotel.province === '海南'));
+  });
+
   it('prefers a configured local inventory file over demo data', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hotel-inventory-'));
     const filePath = join(dir, 'prices.json');
@@ -121,6 +190,93 @@ describe('hotel search data', () => {
       assert.equal(result.total, 1);
       assert.equal(result.hotels[0].name, '北京真实供应商酒店');
     } finally {
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('filters real supplier inventory by province destination', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hotel-province-inventory-'));
+    const filePath = join(dir, 'province.json');
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+
+    await writeFile(filePath, JSON.stringify([
+      {
+        id: 'gd-001',
+        name: '广州省域供应商酒店',
+        province: '广东',
+        city: '广州',
+        district: '天河',
+        price: 620,
+        source: '省域供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'gd-002',
+        name: '深圳省域供应商酒店',
+        province: '广东',
+        city: '深圳',
+        district: '南山',
+        price: 720,
+        source: '省域供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      },
+      {
+        id: 'fj-001',
+        name: '厦门省域供应商酒店',
+        province: '福建',
+        city: '厦门',
+        district: '思明',
+        price: 680,
+        source: '省域供应商',
+        checkIn: '2026-06-01',
+        checkOut: '2026-12-31',
+        available: true
+      }
+    ]));
+
+    process.env.HOTEL_DATA_FILE = filePath;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    clearInventoryCache();
+
+    try {
+      const result = await searchHotels({
+        city: '广东',
+        keyword: '省域供应商',
+        checkIn: '2026-06-06',
+        checkOut: '2026-06-07'
+      });
+
+      assert.equal(result.source, 'local');
+      assert.equal(result.query.destinationType, 'province');
+      assert.equal(result.total, 2);
+      assert.equal(result.coverageCities, 2);
+      assert.ok(result.hotels.every((hotel) => hotel.province === '广东'));
+      assert.ok(result.hotels.some((hotel) => hotel.city === '广州'));
+      assert.ok(result.hotels.some((hotel) => hotel.city === '深圳'));
+    } finally {
+      clearInventoryCache();
       if (previousFile === undefined) {
         delete process.env.HOTEL_DATA_FILE;
       } else {

@@ -175,8 +175,11 @@ async function loadCities() {
   }
   state.cities = data.cities || [];
   elements.cityCount.textContent = String(data.count || state.cities.length);
-  elements.cityList.innerHTML = state.cities
-    .map((city) => `<option value="${escapeHtml(city.city)}">${escapeHtml(city.province)} · ${escapeHtml(city.code || '')}</option>`)
+  const provinceOptions = (data.provinces || [])
+    .map((province) => `<option value="${escapeHtml(province)}">${escapeHtml(province)} · 全省</option>`);
+  const cityOptions = state.cities
+    .map((city) => `<option value="${escapeHtml(city.city)}">${escapeHtml(city.province)} · ${escapeHtml(city.code || '')}</option>`);
+  elements.cityList.innerHTML = [...provinceOptions, ...cityOptions]
     .join('');
   renderPopularCities();
 }
@@ -553,20 +556,23 @@ function searchStaticHotels(query) {
 
 function searchStaticInventory(params) {
   const nights = getNights(params.checkIn, params.checkOut);
-  const city = findStaticCity(params.city)?.city || params.city;
+  const destination = resolveStaticDestination(params.city);
+  const citySet = new Set((destination.cities || []).map((item) => item.city));
   const hotels = state.staticInventoryRows
     .map((row, index) => normalizeStaticHotel(row, index, nights))
     .filter((hotel) => hotel.available)
-    .filter((hotel) => !params.city || hotel.city === city || hotel.province === city)
+    .filter((hotel) => destination.type === 'nationwide'
+      || (destination.type === 'city' && hotel.city === destination.label)
+      || (destination.type === 'province' && (hotel.province === destination.label || citySet.has(hotel.city))))
     .filter((hotel) => isStaticAvailableForDates(hotel, params));
   return applyStaticFilters(mergeStaticRates(hotels), params);
 }
 
 function searchStaticDemo(params) {
-  const city = findStaticCity(params.city);
-  const hotels = city
-    ? buildStaticDemoHotels(city, params)
-    : getStaticCities().flatMap((item) => buildStaticDemoHotels(item, params));
+  const destination = resolveStaticDestination(params.city);
+  if (destination.type === 'unknown') return [];
+  const cities = destination.type === 'city' ? [destination.city] : destination.cities;
+  const hotels = cities.flatMap((item) => buildStaticDemoHotels(item, params));
   return applyStaticFilters(hotels, params);
 }
 
@@ -723,18 +729,76 @@ function getStaticCities() {
 
 function findStaticCity(input) {
   if (!input) return null;
-  const normalized = String(input).trim().replace(/市$/, '');
+  const normalized = normalizeStaticDestinationInput(input);
   const cities = getStaticCities();
   return cities.find((item) => item.city === normalized)
     || cities.find((item) => item.city.includes(normalized))
-    || cities.find((item) => item.province === normalized)
     || null;
 }
 
+function findStaticProvince(input) {
+  if (!input) return null;
+  const normalized = normalizeStaticDestinationInput(input);
+  return [...new Set(getStaticCities().map((item) => item.province))]
+    .find((province) => province === normalized) || null;
+}
+
+function resolveStaticDestination(input) {
+  const normalized = normalizeStaticDestinationInput(input);
+  if (!normalized) return { type: 'nationwide', label: '全国', cities: getStaticCities() };
+  const exactCity = findExactStaticCity(normalized);
+  const province = findStaticProvince(normalized);
+  if (province && (isStaticProvinceIntent(input) || !exactCity)) {
+    return {
+      type: 'province',
+      label: province,
+      province,
+      cities: getStaticCities().filter((item) => item.province === province)
+    };
+  }
+  const city = exactCity || findStaticCity(normalized);
+  if (city) return { type: 'city', label: city.city, city, cities: [city] };
+  if (province) {
+    return {
+      type: 'province',
+      label: province,
+      province,
+      cities: getStaticCities().filter((item) => item.province === province)
+    };
+  }
+  return { type: 'unknown', label: normalized, cities: [] };
+}
+
+function normalizeStaticDestinationInput(input) {
+  return String(input || '')
+    .trim()
+    .replace(/特别行政区$/, '')
+    .replace(/维吾尔自治区$/, '')
+    .replace(/壮族自治区$/, '')
+    .replace(/回族自治区$/, '')
+    .replace(/自治区$/, '')
+    .replace(/[省市]$/, '');
+}
+
+function findExactStaticCity(input) {
+  const normalized = normalizeStaticDestinationInput(input);
+  return getStaticCities().find((item) => item.city === normalized) || null;
+}
+
+function isStaticProvinceIntent(input) {
+  return /(?:省|自治区|特别行政区)$/.test(String(input || '').trim());
+}
+
 function normalizeStaticQuery(query) {
+  const destination = resolveStaticDestination(query.city);
   return {
     ...query,
-    city: findStaticCity(query.city)?.city || query.city || '',
+    city: destination.type === 'nationwide'
+      ? ''
+      : destination.type === 'unknown'
+        ? query.city || ''
+        : destination.label,
+    destinationType: destination.type,
     limit: Number(query.limit || state.pageSize),
     offset: Number(query.offset || 0)
   };
