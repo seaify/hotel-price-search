@@ -11,7 +11,8 @@ const state = {
   remoteInventoryLoads: [],
   defaultRemoteInventoryManifest: null,
   inventoryReadiness: null,
-  savedRemoteInventoryUrls: []
+  savedRemoteInventoryUrls: [],
+  searchApiBaseUrl: ''
 };
 
 const remoteInventoryStorageKey = 'hotelPriceSearch.remoteInventoryUrls';
@@ -765,10 +766,9 @@ async function runSearch(options = {}) {
     updateUrl(baseQuery);
   }
   try {
-    if (isStaticMode()) await loadDefaultRemoteInventorySourcesForQuery(query);
     let data;
     try {
-      data = isStaticMode() ? searchStaticHotels(query) : await fetchJson(`/api/search?${new URLSearchParams(query)}`);
+      data = isStaticMode() ? await searchStaticMode(query) : await fetchJson(`/api/search?${new URLSearchParams(query)}`);
     } catch {
       data = searchStaticHotels(query);
     }
@@ -787,6 +787,68 @@ async function runSearch(options = {}) {
 
 function isStaticMode() {
   return Boolean(window.HOTEL_STATIC_MODE);
+}
+
+async function searchStaticMode(query) {
+  const searchApiUrl = buildStaticSearchApiUrl(query);
+  if (searchApiUrl) {
+    try {
+      return normalizeSearchApiResult(await fetchJson(searchApiUrl));
+    } catch (error) {
+      console.warn('Search API failed, falling back to static inventory:', error.message);
+      await loadDefaultRemoteInventorySourcesForQuery(query);
+      const fallback = searchStaticHotels(query);
+      return {
+        ...fallback,
+        notice: `实时搜索 API 读取失败，已回退到${fallback.source === 'local' ? '静态供应商库存' : '示例价格库'}。${fallback.notice || ''}`
+      };
+    }
+  }
+  await loadDefaultRemoteInventorySourcesForQuery(query);
+  return searchStaticHotels(query);
+}
+
+function normalizeSearchApiResult(data = {}) {
+  return {
+    ...data,
+    source: data.source || 'supplier-api',
+    sourceLabel: data.sourceLabel || '实时搜索 API',
+    mode: data.mode || 'search-api',
+    notice: data.notice || '价格来自已配置的实时搜索 API。'
+  };
+}
+
+function buildStaticSearchApiUrl(query) {
+  const baseUrl = getStaticSearchApiBaseUrl();
+  if (!baseUrl) return '';
+  const url = new URL(baseUrl);
+  const path = url.pathname.replace(/\/+$/, '');
+  url.pathname = path.endsWith('/api/search') ? path : `${path}/api/search`;
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+  });
+  return url.href;
+}
+
+function getStaticSearchApiBaseUrl() {
+  return normalizeStaticSearchApiBaseUrl(
+    state.searchApiBaseUrl ||
+    window.HOTEL_SEARCH_API_BASE_URL ||
+    window.HOTEL_API_BASE_URL ||
+    ''
+  );
+}
+
+function normalizeStaticSearchApiBaseUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    const url = new URL(text, window.location.href);
+    if (!/^https?:$/i.test(url.protocol)) return '';
+    return url.href.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
 }
 
 async function fetchJson(url, options) {
@@ -810,6 +872,7 @@ function applyInitialQueryFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const keys = ['city', 'keyword', 'checkIn', 'checkOut', 'adults', 'rooms', 'star', 'minPrice', 'maxPrice', 'sort'];
   const hasQuery = keys.some((key) => params.has(key));
+  applySearchApiBaseUrlFromParams(params);
   applyRemoteInventoryUrlsFromParams(params);
   if (!hasQuery) return false;
 
@@ -830,6 +893,13 @@ function applyInitialQueryFromUrl() {
     if (params.has(key)) mapping[key].value = params.get(key);
   });
   return true;
+}
+
+function applySearchApiBaseUrlFromParams(params) {
+  if (!isStaticMode()) return;
+  const value = params.get('apiBaseUrl') || params.get('searchApiBaseUrl') || '';
+  const normalized = normalizeStaticSearchApiBaseUrl(value);
+  if (normalized) state.searchApiBaseUrl = normalized;
 }
 
 function applyRemoteInventoryUrlsFromParams(params) {
@@ -856,6 +926,7 @@ function updateUrl(query) {
     if (value !== undefined && value !== null && value !== '') params.set(key, value);
     if (key === 'city' && value === '') params.set(key, '');
   });
+  if (isStaticMode() && state.searchApiBaseUrl) params.set('apiBaseUrl', state.searchApiBaseUrl);
   const nextUrl = `${window.location.pathname}?${params.toString()}`;
   window.history.replaceState(null, '', nextUrl);
 }
@@ -1670,6 +1741,7 @@ function getStaticProviderStatus() {
     .filter((load) => load.type === 'manifest')
     .reduce((total, load) => total + Number(load.sourceCount || 0), 0);
   const remoteSourceCount = Math.max(remoteSourceLoads.length, manifestSourceCount);
+  const searchApiBaseUrl = getStaticSearchApiBaseUrl();
   return {
     localInventory: {
       configured: localReady,
@@ -1695,7 +1767,11 @@ function getStaticProviderStatus() {
       importedFiles: state.staticImportNames.map((filename) => ({ filename })),
       coverage: localReady ? summarizeStaticInventoryCoverage() : null
     },
-    supplierApi: { configured: false },
+    supplierApi: {
+      configured: Boolean(searchApiBaseUrl),
+      apiCount: searchApiBaseUrl ? 1 : 0,
+      name: searchApiBaseUrl ? '外部搜索 API' : ''
+    },
     amadeus: { configured: false },
     demo: { enabled: true, cities: getStaticCities().length }
   };

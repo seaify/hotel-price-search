@@ -19,9 +19,10 @@ export async function buildPages(options = {}) {
   const docsDir = resolve(rootDir, options.docsDir || 'docs');
   const inventory = await preparePagesInventory(rootDir, options);
   const readiness = buildInventoryReadiness(inventory, options);
+  const searchApiBaseUrl = getPagesSearchApiBaseUrl(options);
 
-  const staticData = `window.HOTEL_STATIC_DATA = ${JSON.stringify({ cities: cityCatalog }, null, 2)};\nwindow.HOTEL_STATIC_MODE = false;\n`;
-  const pagesStaticData = `window.HOTEL_STATIC_DATA = ${JSON.stringify({ cities: cityCatalog }, null, 2)};\nwindow.HOTEL_STATIC_MODE = true;\n`;
+  const staticData = buildStaticDataScript({ staticMode: false, searchApiBaseUrl });
+  const pagesStaticData = buildStaticDataScript({ staticMode: true, searchApiBaseUrl });
 
   await mkdir(publicDir, { recursive: true });
   await writeFile(resolve(publicDir, 'static-data.js'), staticData, 'utf8');
@@ -34,6 +35,23 @@ export async function buildPages(options = {}) {
   await writeFile(resolve(docsDir, 'static-data.js'), pagesStaticData, 'utf8');
 
   return { rootDir, publicDir, docsDir, inventory, readiness };
+}
+
+function buildStaticDataScript(options = {}) {
+  return [
+    `window.HOTEL_STATIC_DATA = ${JSON.stringify({ cities: cityCatalog }, null, 2)};`,
+    `window.HOTEL_STATIC_MODE = ${options.staticMode ? 'true' : 'false'};`,
+    `window.HOTEL_SEARCH_API_BASE_URL = ${JSON.stringify(options.searchApiBaseUrl || '')};`
+  ].join('\n') + '\n';
+}
+
+function getPagesSearchApiBaseUrl(options = {}) {
+  return String(
+    options.searchApiBaseUrl
+      ?? process.env.HOTEL_PAGES_SEARCH_API_BASE_URL
+      ?? process.env.HOTEL_PAGES_API_BASE_URL
+      ?? ''
+  ).trim();
 }
 
 async function preparePagesInventory(rootDir, options) {

@@ -18,6 +18,57 @@ describe('hotel search data', () => {
     assert.ok(cityCatalog.some((city) => city.city === '喀什'));
   });
 
+  it('serves API responses with CORS headers for GitHub Pages clients', async () => {
+    const previousCorsOrigin = process.env.HOTEL_API_CORS_ORIGIN;
+    const previousFile = process.env.HOTEL_DATA_FILE;
+    const previousFiles = process.env.HOTEL_DATA_FILES;
+    const previousImportDir = process.env.HOTEL_IMPORT_DIR;
+    delete process.env.HOTEL_DATA_FILE;
+    delete process.env.HOTEL_DATA_FILES;
+    delete process.env.HOTEL_IMPORT_DIR;
+    process.env.HOTEL_API_CORS_ORIGIN = 'https://seaify.github.io';
+    clearInventoryCache();
+
+    const server = createHotelServer();
+    await new Promise((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const optionsResponse = await fetch(`${baseUrl}/api/search`, { method: 'OPTIONS' });
+      assert.equal(optionsResponse.status, 204);
+      assert.equal(optionsResponse.headers.get('access-control-allow-origin'), 'https://seaify.github.io');
+      assert.match(optionsResponse.headers.get('access-control-allow-methods'), /GET/);
+
+      const searchResponse = await fetch(`${baseUrl}/api/search?city=%E5%8C%97%E4%BA%AC&checkIn=2026-06-06&checkOut=2026-06-07`);
+      assert.equal(searchResponse.status, 200);
+      assert.equal(searchResponse.headers.get('access-control-allow-origin'), 'https://seaify.github.io');
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      clearInventoryCache();
+      if (previousCorsOrigin === undefined) {
+        delete process.env.HOTEL_API_CORS_ORIGIN;
+      } else {
+        process.env.HOTEL_API_CORS_ORIGIN = previousCorsOrigin;
+      }
+      if (previousFile === undefined) {
+        delete process.env.HOTEL_DATA_FILE;
+      } else {
+        process.env.HOTEL_DATA_FILE = previousFile;
+      }
+      if (previousFiles === undefined) {
+        delete process.env.HOTEL_DATA_FILES;
+      } else {
+        process.env.HOTEL_DATA_FILES = previousFiles;
+      }
+      if (previousImportDir === undefined) {
+        delete process.env.HOTEL_IMPORT_DIR;
+      } else {
+        process.env.HOTEL_IMPORT_DIR = previousImportDir;
+      }
+    }
+  });
+
   it('filters demo hotels by price and star', () => {
     const hotels = buildDemoHotels({
       city: '上海',

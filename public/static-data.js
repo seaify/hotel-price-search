@@ -5505,3 +5505,4 @@ window.HOTEL_STATIC_DATA = {
   ]
 };
 window.HOTEL_STATIC_MODE = false;
+window.HOTEL_SEARCH_API_BASE_URL = "";

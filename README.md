@@ -120,6 +120,15 @@ export HOTEL_SUPPLIER_API_CONFIG='[
 npm start
 ```
 
+GitHub Pages 只能托管静态文件，不能安全保存供应商 API token。线上 Pages 要实时查价时，需要把这个 Node 应用单独部署成 API 后端，在后端配置 `HOTEL_SUPPLIER_API_*` 密钥，再让 Pages 调用这个后端的 `/api/search`：
+
+```bash
+HOTEL_API_CORS_ORIGIN=https://seaify.github.io npm start
+HOTEL_PAGES_SEARCH_API_BASE_URL=https://hotel-api.example.com npm run build:pages
+```
+
+也可以临时用 URL 参数测试：`https://seaify.github.io/hotel-price-search/?apiBaseUrl=https%3A%2F%2Fhotel-api.example.com&city=北京`。不要把供应商 token 放进 `apiBaseUrl` 或前端代码里。
+
 `GET` 默认会把 `city`、`destinationType`、`keyword`、`checkIn`、`checkOut`、`adults`、`rooms`、`minPrice`、`maxPrice`、`star`、`sort`、`limit`、`offset` 作为查询参数传递；`POST` 默认会传同样的 JSON body。若供应商请求字段不同，可用 `requestMap` 改名：左边是供应商需要的请求字段，右边是本站内部查询字段。除原始 `limit` / `offset` 外，还可映射派生字段 `page` 和 `pageSize`，其中 `page = floor(offset / limit) + 1`。也可映射 `cityName`、`cityCode`、`cityId`、`provinceName`、`provinceCode`、`destinationId`、`supplierDestination.*` 等目的地字段。GET 会把嵌套路径展平成查询参数，例如 `stay.arrival=2026-06-06`；POST 会生成嵌套 JSON。`requestDefaults` 可放固定请求参数，例如 `locale`、`currency`、`channel`。
 
 如果供应商需要自己的城市 ID 或目的地编码，可在单个源里配置 `destinationMap`，再在 `requestMap` 里引用 `supplierDestination.cityId`、`supplierDestination.cityCode` 或自定义字段：

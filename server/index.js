@@ -48,6 +48,10 @@ export function createHotelServer() {
     try {
       const url = new URL(request.url, `http://${request.headers.host}`);
 
+      if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+        return sendOptions(response);
+      }
+
       if (url.pathname === '/api/cities') {
         return sendJson(response, summarizeCities());
       }
@@ -484,8 +488,16 @@ async function serveStatic(pathname, response) {
 }
 
 function sendJson(response, payload, status = 200) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.writeHead(status, {
+    ...getCorsHeaders(),
+    'Content-Type': 'application/json; charset=utf-8'
+  });
   response.end(JSON.stringify(payload));
+}
+
+function sendOptions(response) {
+  response.writeHead(204, getCorsHeaders());
+  response.end();
 }
 
 function sendCoverageCsv(response, coverage, filename = 'hotel-coverage.csv') {
@@ -529,10 +541,20 @@ function sendDestinationCoverageCsv(response, coverage) {
 
 function sendCsv(response, csv, filename) {
   response.writeHead(200, {
+    ...getCorsHeaders(),
     'Content-Type': 'text/csv; charset=utf-8',
     'Content-Disposition': `attachment; filename="${filename}"`
   });
   response.end(`\uFEFF${csv}\n`);
+}
+
+function getCorsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': process.env.HOTEL_API_CORS_ORIGIN || process.env.CORS_ORIGIN || '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Api-Key',
+    'Access-Control-Max-Age': '86400'
+  };
 }
 
 function csvEscape(value) {

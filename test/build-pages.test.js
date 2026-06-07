@@ -23,7 +23,11 @@ describe('GitHub Pages builder', () => {
     ].join('\n'));
 
     try {
-      const result = await buildPages({ rootDir: root, generatedAt: '2026-06-06T00:00:00Z' });
+      const result = await buildPages({
+        rootDir: root,
+        generatedAt: '2026-06-06T00:00:00Z',
+        searchApiBaseUrl: 'https://hotel-api.example.com'
+      });
       const manifest = JSON.parse(await readFile(join(root, 'docs', 'hotel-inventory.manifest.json'), 'utf8'));
       const readiness = JSON.parse(await readFile(join(root, 'docs', 'inventory-readiness.json'), 'utf8'));
       const docsStaticData = await readFile(join(root, 'docs', 'static-data.js'), 'utf8');
@@ -65,6 +69,8 @@ describe('GitHub Pages builder', () => {
       ]);
       assert.match(docsStaticData, /window\.HOTEL_STATIC_MODE = true;/);
       assert.match(publicStaticData, /window\.HOTEL_STATIC_MODE = false;/);
+      assert.match(docsStaticData, /window\.HOTEL_SEARCH_API_BASE_URL = "https:\/\/hotel-api\.example\.com";/);
+      assert.match(publicStaticData, /window\.HOTEL_SEARCH_API_BASE_URL = "https:\/\/hotel-api\.example\.com";/);
       await access(join(root, 'docs', 'inventory', 'guangdong', 'shenzhen.csv'));
       await access(join(root, 'docs', '.nojekyll'));
     } finally {
