@@ -366,7 +366,9 @@ public/fonts/OPPOSans-Bold.woff2
 public/fonts/OPPOSans-Heavy.woff2
 ```
 
-也支持同名 `.ttf`。没有字体文件时，浏览器会先尝试本机安装的 `OPPO Sans`，再回退到系统中文字体。
+OPPO Sans 4.0 常见文件名也已支持，例如 `public/fonts/OPPOSans4.0-Regular.ttf`。也支持同名 `.ttf`。没有字体文件时，浏览器会先尝试本机安装的 `OPPO Sans 4.0` / `OPPO Sans`，再回退到系统中文字体。
+
+为了匹配你指定的数字样式，站点还内置了一个只覆盖数字 `3` 的 `Hotel Flat Three` 字体，让 `3` 的上沿保持平直；其他字符仍按 OPPO Sans 字体栈显示。
 
 ## 部署到 GitHub Pages
 
