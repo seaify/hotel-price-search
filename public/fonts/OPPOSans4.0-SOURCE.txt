@@ -1,0 +1,15 @@
+OPPO Sans 4.0 Regular
+
+Local file:
+OPPOSans4.0-Regular.ttf
+
+Source references:
+https://www.fonthubs.com/fonts/oppo-sans-40
+https://www.fonthubs.com/en/fonts/oppo-sans-40
+https://www.npmjs.com/package/@fontpkg/oppo-sans-4-0
+
+Notes:
+- FontHubs lists OPPO Sans 4.0 as a Regular TTF font file.
+- The npm package @fontpkg/oppo-sans-4-0 version 1.700.0 includes one TTF file named "OPPO Sans 4.0.ttf".
+- Font copyright metadata: copyright (c) 2019-2024 by OPPO. All rights reserved.
+- Keep a visible notice that OPPO Sans is used. Do not sell the font file as a standalone product.

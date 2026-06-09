@@ -356,19 +356,13 @@ npm test
 
 ## 字体
 
-页面 CSS 已统一优先使用 OPPO Sans。字体加载路径预留在 `public/fonts/`，如果要让 GitHub Pages 也稳定显示 OPPO 字体，请把官方授权获取的字体文件放入：
+页面 CSS 已统一优先使用 OPPO Sans，并已内置 `public/fonts/OPPOSans4.0-Regular.ttf`。这个文件是 OPPO Sans 4.0 Regular，本地和 GitHub Pages 都会直接加载，不再依赖用户电脑是否安装字体。
 
 ```text
-public/fonts/OPPOSans-Light.woff2
-public/fonts/OPPOSans-Regular.woff2
-public/fonts/OPPOSans-Medium.woff2
-public/fonts/OPPOSans-Bold.woff2
-public/fonts/OPPOSans-Heavy.woff2
+public/fonts/OPPOSans4.0-Regular.ttf
 ```
 
-OPPO Sans 4.0 常见文件名也已支持，例如 `public/fonts/OPPOSans4.0-Regular.ttf`。也支持同名 `.ttf`。没有字体文件时，浏览器会先尝试本机安装的 `OPPO Sans 4.0` / `OPPO Sans`，再回退到系统中文字体。
-
-为了匹配你指定的数字样式，站点还内置了一个只覆盖数字 `3` 的 `Hotel Flat Three` 字体，让 `3` 的上沿保持平直；其他字符仍按 OPPO Sans 字体栈显示。
+当前资源只提供 Regular 字重；页面上的粗体效果由浏览器按 Regular 字体合成。字体来源参考 FontHubs 的 OPPO Sans 4.0 页面和 npm 包 `@fontpkg/oppo-sans-4-0`，版权归 OPPO 所有，使用时请保留 OPPO Sans 使用说明，不要单独售卖字体文件。
 
 ## 部署到 GitHub Pages
 
