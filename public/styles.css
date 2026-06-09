@@ -1,5 +1,62 @@
+@font-face {
+  font-family: "OPPO Sans";
+  src:
+    local("OPPO Sans Light"),
+    url("fonts/OPPOSans-Light.woff2") format("woff2"),
+    url("fonts/OPPOSans-Light.ttf") format("truetype");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OPPO Sans";
+  src:
+    local("OPPO Sans"),
+    local("OPPO Sans Regular"),
+    url("fonts/OPPOSans-Regular.woff2") format("woff2"),
+    url("fonts/OPPOSans-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OPPO Sans";
+  src:
+    local("OPPO Sans Medium"),
+    url("fonts/OPPOSans-Medium.woff2") format("woff2"),
+    url("fonts/OPPOSans-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OPPO Sans";
+  src:
+    local("OPPO Sans Bold"),
+    url("fonts/OPPOSans-Bold.woff2") format("woff2"),
+    url("fonts/OPPOSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OPPO Sans";
+  src:
+    local("OPPO Sans Heavy"),
+    url("fonts/OPPOSans-Heavy.woff2") format("woff2"),
+    url("fonts/OPPOSans-Heavy.ttf") format("truetype");
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
+  --oppo-font: "OPPO Sans", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
   --bg: #f6f7f4;
   --surface: #ffffff;
   --surface-strong: #eff5f1;
@@ -24,7 +81,7 @@ html {
 
 body {
   margin: 0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--oppo-font);
   color: var(--ink);
   background:
     linear-gradient(180deg, rgba(11, 122, 117, 0.12), rgba(246, 247, 244, 0) 320px),

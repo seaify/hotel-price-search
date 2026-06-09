@@ -354,6 +354,20 @@ https://seaify.github.io/hotel-price-search/?inventoryUrl=https%3A%2F%2Fexample.
 npm test
 ```
 
+## 字体
+
+页面 CSS 已统一优先使用 OPPO Sans。字体加载路径预留在 `public/fonts/`，如果要让 GitHub Pages 也稳定显示 OPPO 字体，请把官方授权获取的字体文件放入：
+
+```text
+public/fonts/OPPOSans-Light.woff2
+public/fonts/OPPOSans-Regular.woff2
+public/fonts/OPPOSans-Medium.woff2
+public/fonts/OPPOSans-Bold.woff2
+public/fonts/OPPOSans-Heavy.woff2
+```
+
+也支持同名 `.ttf`。没有字体文件时，浏览器会先尝试本机安装的 `OPPO Sans`，再回退到系统中文字体。
+
 ## 部署到 GitHub Pages
 
 这个仓库支持和 `https://seaify.github.io/douyin-live-schedule/` 相同的项目页部署方式。生成静态站点：
